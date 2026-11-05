@@ -22,6 +22,95 @@ const STORED_SECRET_VERSION = 1
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/
 const PROCESS_LAUNCH_TOKENS = new WeakMap<object, string>()
 
+/**
+ * Standalone 401 page. Three constraints shape it.
+ *
+ * An installed web application has no address bar and its start URL is fixed
+ * at install time, so a process token minted after that install cannot be
+ * supplied by navigation. The form is the only surface left for pasting the
+ * URL printed by `dsh web`.
+ *
+ * A standalone launch can also arrive without the `SameSite=Strict` session
+ * cookie while the same profile holds a valid one; a navigation started by
+ * this document carries it. The page therefore reloads itself once, which
+ * turns a cookie that is present but unattached into an authenticated load
+ * without operator action, and only then shows the form.
+ *
+ * The page never becomes the application: it is a fixed document served by
+ * `writeUnauthorized`, with no framework, no external asset, and no product
+ * copy from the client dictionaries.
+ */
+const UNAUTHORIZED_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authentication required</title>
+<style>
+:root { color-scheme: light dark; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 16px/1.5 system-ui, sans-serif; }
+main { box-sizing: border-box; width: min(36rem, 100vw - 2rem); padding: 1.5rem; }
+h1 { margin: 0 0 0.5rem; font-size: 1.25rem; }
+p { margin: 0 0 1.25rem; }
+label { display: block; margin-bottom: 0.375rem; font-weight: 600; }
+form { display: grid; gap: 0.75rem; }
+input, button { box-sizing: border-box; width: 100%; padding: 0.625rem 0.75rem; font: inherit; border: 1px solid GrayText; border-radius: 0.375rem; }
+input { background: Field; color: FieldText; }
+button { background: ButtonFace; color: ButtonText; cursor: pointer; }
+output { min-height: 1.5em; color: #c62828; }
+</style>
+</head>
+<body>
+<main>
+<h1>Authentication required</h1>
+<p>This browser has no valid session. Paste the URL printed by <code>dsh web</code>, including its token.</p>
+<form id="auth-form">
+<label for="auth-url">Application URL</label>
+<input id="auth-url" name="url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+<button type="submit">Open</button>
+<output id="auth-error" role="alert"></output>
+</form>
+</main>
+<script>
+const form = document.getElementById('auth-form');
+const input = document.getElementById('auth-url');
+const error = document.getElementById('auth-error');
+input.value = window.location.href;
+// A standalone launch omits the Strict cookie; a navigation from this page
+// carries it. The timestamp separates this page's own retry, whose second 401
+// arrives within milliseconds, from a later unauthenticated visit, which may
+// retry again.
+const retryKey = 'dsh-auth-retry';
+try {
+  const now = Date.now();
+  const last = Number(window.sessionStorage.getItem(retryKey) ?? 0);
+  if (now - last > 5000) {
+    window.sessionStorage.setItem(retryKey, String(now));
+    window.location.replace(window.location.href);
+  }
+} catch {
+  // Storage is unavailable; the form remains the only route.
+}
+form.addEventListener('submit', (event) => {
+  event.preventDefault();
+  let url;
+  try {
+    url = new URL(input.value.trim());
+  } catch {
+    url = undefined;
+  }
+  if (url === undefined || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
+    error.textContent = 'Enter an http or https URL.';
+    return;
+  }
+  error.textContent = '';
+  window.location.href = url.href;
+});
+</script>
+</body>
+</html>
+`
+
 interface StoredSecretPayload {
   readonly version: typeof STORED_SECRET_VERSION
   readonly secret: string
@@ -386,10 +475,14 @@ export class BrowserAuth {
   private writeUnauthorized(req: ConnectionIndexRequest, res: ConnectionIndexResponse): void {
     res.writeHead(401, {
       'cache-control': 'no-store',
-      'content-type': 'text/plain; charset=utf-8',
+      'content-type': 'text/html; charset=utf-8',
+      // The page navigates to a URL the operator supplies from another screen.
+      'referrer-policy': 'no-referrer',
+      // The page is a fixed document with one inline script and one inline
+      // stylesheet; nothing may load, frame it, or rewrite the base URL.
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      'x-content-type-options': 'nosniff',
     })
-    res.end(req.method === 'HEAD'
-      ? undefined
-      : 'dsh web authentication required; reopen the URL printed by dsh web.\n')
+    res.end(req.method === 'HEAD' ? undefined : UNAUTHORIZED_PAGE)
   }
 }

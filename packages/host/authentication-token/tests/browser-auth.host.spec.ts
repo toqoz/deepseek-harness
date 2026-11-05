@@ -100,11 +100,18 @@ describe('API credentials', () => {
 
     auth.authorizeConnect({ method: 'GET', headers: { host: 'localhost' } }, res.value, false, publish)
 
-    expect(res.state).toEqual({
+    expect(res.state).toMatchObject({
       status: 401,
-      headers: { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' },
-      body: 'dsh web authentication required; reopen the URL printed by dsh web.\n',
+      headers: {
+        'cache-control': 'no-store',
+        'content-type': 'text/html; charset=utf-8',
+        'referrer-policy': 'no-referrer',
+        'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        'x-content-type-options': 'nosniff',
+      },
     })
+    expect(res.state.body).toContain('Authentication required')
+    expect(res.state.body).toContain('id="auth-url"')
     expect(publish).not.toHaveBeenCalled()
   })
 
@@ -279,11 +286,19 @@ describe('BrowserAuth', () => {
       expect(denied.state.status).toBe(401)
       expect(denied.state.headers).toEqual({
         'cache-control': 'no-store',
-        'content-type': 'text/plain; charset=utf-8',
+        'content-type': 'text/html; charset=utf-8',
+        'referrer-policy': 'no-referrer',
+        'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        'x-content-type-options': 'nosniff',
       })
-      expect(denied.state.body).toBe(candidate.method === 'HEAD'
-        ? undefined
-        : 'dsh web authentication required; reopen the URL printed by dsh web.\n')
+      if (candidate.method === 'HEAD') expect(denied.state.body).toBeUndefined()
+      else {
+        expect(denied.state.body).toContain('Authentication required')
+        // The form is the only navigation surface left when no address bar exists.
+        expect(denied.state.body).toContain('window.location.href = url.href')
+        // A PWA launch can omit the Strict cookie; one in-page retry carries it.
+        expect(denied.state.body).toContain('dsh-auth-retry')
+      }
     }
   })
 
