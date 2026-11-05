@@ -76,11 +76,11 @@ git reset --hard toqoz/main
 ```sh
 gh gist edit <id> --filename deepseek-harness-toqoz-fork.md deepseek-harness-toqoz-fork.md   # last path is the local file
 # or, for a new gist
-gh gist create --desc "個人 fork の変更" --filename deepseek-harness-toqoz-fork.md - < deepseek-harness-toqoz-fork.md
+gh gist create --public --desc "個人 fork の変更" --filename deepseek-harness-toqoz-fork.md - < deepseek-harness-toqoz-fork.md
 .git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --message <gist-url> --push
 ```
 
-Write the gist in Japanese, short and factual: what changed, why, and how it was verified. Sections are optional; do not pad it.
+The gist is public; visibility is fixed at creation, so create a new gist (and repoint the commit message) if it was made secret by mistake. Write it in Japanese, short and factual: what changed, why, and how it was verified. Sections are optional; do not pad it.
 
 ## Import upstream
 
