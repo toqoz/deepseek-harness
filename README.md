@@ -14,7 +14,11 @@ ln -s ../../.git/wt/ops/.agents/skills/dsh-personal-fork .agents/skills/dsh-pers
 printf '.agents/skills/dsh-personal-fork\n' >> .git/info/exclude
 ```
 
-The link lets DSH discover the skill from the main checkout.
+The link lets DSH discover the skill from the main checkout. After a fresh
+clone, also recreate `CLAUDE.local.md` (gitignored) with a short pointer to
+this skill: DSH injects `.local` overlays into every session whose working
+directory is the checkout, so a new session starts with the branch model in
+context instead of committing straight to a code branch.
 
 The procedure is `.agents/skills/dsh-personal-fork/SKILL.md`; the entry point is
 `scripts/sync.sh`.
