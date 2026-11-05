@@ -59,6 +59,17 @@ declare module '@deepseek-ai/cordis' {
      */
     'webserver/authorize'(request: WebAuthRequest, policy: WebAuthPolicy): WebAdmission | undefined
     /**
+     * Render the response for a denied request; the first listener that answers
+     * wins, and the webserver writes its own status line and short body when
+     * nobody does.
+     * @param request - headers, target, transport, and available cancellation state.
+     * @param response - response owned by the answering listener to completion.
+     * @param admission - the denial that stopped the request.
+     * @mode bail
+     * @returns true when this listener wrote the response.
+     */
+    'webserver/deny'(request: WebAuthRequest, response: ServerResponse, admission: WebAdmission): boolean | undefined
+    /**
      * Handle an HTTP request before named-route and fallback dispatch.
      * @param request - original incoming HTTP request.
      * @param response - response owned by the listener or its delegated handler.
@@ -635,6 +646,7 @@ export class WebServer extends Service {
         const admission = this.authorize(request, responder.auth)
         if (abort.signal.aborted || request.socket?.destroyed) return
         if (admission.kind === 'deny') {
+          if (this.ctx.bail(this, 'webserver/deny', request, res, admission) === true) return
           res.writeHead(admission.status, { 'Cache-Control': 'no-store' })
           res.end(admission.status === 401 ? 'unauthorized' : admission.status === 503 ? 'authentication unavailable' : 'forbidden')
           return

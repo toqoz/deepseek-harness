@@ -6257,6 +6257,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'request', description: 'headers, target, transport, and available cancellation state.' }, { name: 'policy', description: 'resolved route policy; deny never emits this event.' }],
   },
   {
+    name: 'webserver/deny',
+    mode: 'bail',
+    signature: '\'webserver/deny\'(request: WebAuthRequest, response: ServerResponse, admission: WebAdmission): boolean | undefined',
+    summary: 'Render the response for a denied request; the first listener that answers wins, and the webserver writes its own status line and short body when nobody does.',
+    description: 'Render the response for a denied request; the first listener that answers wins, and the webserver writes its own status line and short body when nobody does.',
+    parameters: [{ name: 'request', description: 'headers, target, transport, and available cancellation state.' }, { name: 'response', description: 'response owned by the answering listener to completion.' }, { name: 'admission', description: 'the denial that stopped the request.' }],
+  },
+  {
     name: 'webserver/entry-url',
     mode: 'emit',
     signature: '\'webserver/entry-url\'(baseUrl: string, entries: WebEntryUrl[]): void',
