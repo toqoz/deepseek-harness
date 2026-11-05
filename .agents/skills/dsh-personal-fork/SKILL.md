@@ -74,9 +74,9 @@ git reset --hard toqoz/main
 `toqoz/main` keeps the gist URL of the previous run. Rewrite the gist only when the personal delta changes materially, then rebuild with the new URL:
 
 ```sh
-gh gist edit <id> --filename toqoz.md toqoz.md   # last path is the local file
+gh gist edit <id> --filename deepseek-harness-toqoz-fork.md deepseek-harness-toqoz-fork.md   # last path is the local file
 # or, for a new gist
-gh gist create --desc "個人 fork の変更" --filename toqoz.md - < toqoz.md
+gh gist create --desc "個人 fork の変更" --filename deepseek-harness-toqoz-fork.md - < deepseek-harness-toqoz-fork.md
 .git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --message <gist-url> --push
 ```
 
