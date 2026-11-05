@@ -349,6 +349,28 @@ Admit a matched request synchronously; the first decision wins.
 
 Source: [`packages/host/webserver/src/index.ts`](../../packages/host/webserver/src/index.ts)
 
+<a id="webserverdeny--bail"></a>
+
+#### `webserver/deny` — bail
+
+Render the response for a denied request; the first listener that answers wins, and the webserver writes its own status line and short body when nobody does.
+
+```ts cordis-catalog
+/**
+ * Render the response for a denied request; the first listener that answers
+ * wins, and the webserver writes its own status line and short body when
+ * nobody does.
+ * @param request - headers, target, transport, and available cancellation state.
+ * @param response - response owned by the answering listener to completion.
+ * @param admission - the denial that stopped the request.
+ * @mode bail
+ * @returns true when this listener wrote the response.
+ */
+'webserver/deny'(request: WebAuthRequest, response: ServerResponse, admission: WebAdmission): boolean | undefined
+```
+
+Source: [`packages/host/webserver/src/index.ts`](../../packages/host/webserver/src/index.ts)
+
 <a id="webserverentry-url--emit"></a>
 
 #### `webserver/entry-url` — emit
