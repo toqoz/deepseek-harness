@@ -24,7 +24,8 @@ describe('keymap keydown routing', () => {
     editor.setRootElement(first)
     const unregister = registerComposerKeymap(editor, {
       arbitrate: () => 'pass', space: () => false, dismissPopup: () => {},
-      canSubmit: () => false, submit: () => {}, intakeFiles: () => {}, pasteText: () => {},
+      canSubmit: () => false, enterInsertsLineBreak: () => false,
+      submit: () => {}, intakeFiles: () => {}, pasteText: () => {},
     })
     onTestFinished(unregister)
     fireEvent.compositionStart(first)
@@ -57,6 +58,7 @@ describe('keymap keydown routing', () => {
       space: () => false,
       dismissPopup: () => {},
       canSubmit: () => true,
+      enterInsertsLineBreak: () => false,
       submit,
       intakeFiles: () => {},
       pasteText: () => {},
@@ -65,6 +67,31 @@ describe('keymap keydown routing', () => {
     expect(submit).toHaveBeenCalledWith(false)
     fireEvent.keyDown(root, { key: 'Enter', metaKey: true })
     expect(submit).toHaveBeenCalledWith(true)
+  })
+
+  it('leaves Enter to the editor when the device has no Shift+Enter', () => {
+    const editor = createEditor({ namespace: 'enter-line-break', onError: (e) => { throw e } })
+    const root = document.createElement('div')
+    root.contentEditable = 'true'
+    document.body.appendChild(root)
+    onTestFinished(() => { editor.setRootElement(null); root.remove() })
+    editor.setRootElement(root)
+    onTestFinished(registerPlainText(editor))
+    const submit = vi.fn()
+    const arbitrate = vi.fn(() => 'pass' as const)
+    onTestFinished(registerComposerKeymap(editor, {
+      arbitrate, space: () => false, dismissPopup: () => {}, canSubmit: () => true,
+      enterInsertsLineBreak: () => true, submit, intakeFiles: () => {}, pasteText: () => {},
+    }))
+    editor.update(() => {
+      $getRoot().append($createParagraphNode().append($createTextNode('first line')))
+    }, { discrete: true })
+
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    root.dispatchEvent(enter)
+    expect(submit).not.toHaveBeenCalled()
+    expect(arbitrate).toHaveBeenCalledWith('enter', false)
+    expect(enter.defaultPrevented).toBe(false)
   })
 
   it.each([
@@ -87,7 +114,7 @@ describe('keymap keydown routing', () => {
     const arbitrate = vi.fn(() => 'pass' as const)
     onTestFinished(registerComposerKeymap(editor, {
       arbitrate, space: () => false, dismissPopup: () => {}, canSubmit: () => true,
-      submit, intakeFiles: () => {}, pasteText: () => {},
+      enterInsertsLineBreak: () => false, submit, intakeFiles: () => {}, pasteText: () => {},
     }))
     editor.update(() => {
       const paragraph = $createParagraphNode().append($createTextNode('unsent draft'))
@@ -125,6 +152,7 @@ describe('keymap keydown routing', () => {
       space: () => false,
       dismissPopup: () => {},
       canSubmit: () => true,
+      enterInsertsLineBreak: () => false,
       submit: () => {},
       intakeFiles: () => {},
       pasteText: () => {},

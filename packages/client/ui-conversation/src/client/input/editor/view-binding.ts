@@ -137,6 +137,7 @@ export function installDraftKeymap(
     },
     dismissPopup: () => { keyboard.dismissPopup() },
     canSubmit: () => !gate.current.locked && !gate.current.machineBusy,
+    enterInsertsLineBreak: () => isMobileDevice(),
     submit: (accelerated) => {
       const g = gate.current
       // Empty-draft accelerated Enter acts on the queue instead of the

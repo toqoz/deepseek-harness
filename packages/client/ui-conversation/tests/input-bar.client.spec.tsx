@@ -425,12 +425,14 @@ describe('composer focus handoff', () => {
   ])('returns focus within the composer after %s', async (_label, outcome, mobile) => {
     const device = vi.spyOn(uiPrimitives, 'isMobileDevice').mockReturnValue(mobile)
     onTestFinished(() => { device.mockRestore() })
-    const { view, shell, textarea, sink } = bench()
+    const { view, shell, textarea, sink, button } = bench()
     writeDraft(shell, 'draft text')
     act(() => { shell.focus() })
     let settle!: (outcome: SubmitOutcome) => void
     sink.mockImplementationOnce(() => new Promise<SubmitOutcome>((resolve) => { settle = resolve }))
-    fireEvent.keyDown(textarea, { key: 'Enter' })
+    // A touch keyboard submits through the button: its Enter edits the draft.
+    if (mobile) fireEvent.click(button)
+    else fireEvent.keyDown(textarea, { key: 'Enter' })
     expect(textarea.getAttribute('contenteditable')).toBe('false')
     // A browser moves the keyboard to the body once the focused box stops being editable; jsdom does not.
     act(() => { textarea.blur() })
@@ -888,6 +890,17 @@ describe('Enter semantics', () => {
     fireEvent.keyDown(textarea, { key: 'a' })
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })
     expect(sink).not.toHaveBeenCalled()
+  })
+
+  it('keeps plain Enter as a line break on a touch device, leaving the button to send', async () => {
+    const device = vi.spyOn(uiPrimitives, 'isMobileDevice').mockReturnValue(true)
+    onTestFinished(() => { device.mockRestore() })
+    const { textarea, sink, shell } = bench({ draft: 'hello' })
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    textarea.dispatchEvent(enter)
+    await act(async () => {})
+    expect(sink).not.toHaveBeenCalled()
+    expect(shell.snapshot.draft).toBe('hello\n')
   })
 
   it('Shift+Enter newline wins even inside IME composition (unconditional precedence)', () => {
@@ -1628,13 +1641,13 @@ describe('running and lock semantics', () => {
   })
 
   it.each([
-    { name: 'iPhone', userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1', platform: 'iPhone', maxTouchPoints: 5, automatic: false },
-    { name: 'Android phone', userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/119.0.0.0 Mobile Safari/537.36', platform: 'Linux armv8l', maxTouchPoints: 0, automatic: false },
-    { name: 'Android tablet', userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/119.0.0.0 Safari/537.36', platform: 'Linux armv8l', maxTouchPoints: 5, automatic: false },
-    { name: 'desktop-mode iPad', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15', platform: 'MacIntel', maxTouchPoints: 5, automatic: false },
-    { name: 'Mac', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15', platform: 'MacIntel', maxTouchPoints: 0, automatic: true },
-    { name: 'Windows touchscreen', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/119.0.0.0 Safari/537.36', platform: 'Win32', maxTouchPoints: 5, automatic: true },
-  ])('composer focus and submission respect device classification: $name', async ({ userAgent, platform, maxTouchPoints, automatic }) => {
+    { name: 'iPhone', userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1', platform: 'iPhone', maxTouchPoints: 5, automatic: false, mobile: true },
+    { name: 'Android phone', userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/119.0.0.0 Mobile Safari/537.36', platform: 'Linux armv8l', maxTouchPoints: 0, automatic: false, mobile: true },
+    { name: 'Android tablet', userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/119.0.0.0 Safari/537.36', platform: 'Linux armv8l', maxTouchPoints: 5, automatic: false, mobile: true },
+    { name: 'desktop-mode iPad', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15', platform: 'MacIntel', maxTouchPoints: 5, automatic: false, mobile: true },
+    { name: 'Mac', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15', platform: 'MacIntel', maxTouchPoints: 0, automatic: true, mobile: false },
+    { name: 'Windows touchscreen', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/119.0.0.0 Safari/537.36', platform: 'Win32', maxTouchPoints: 5, automatic: true, mobile: false },
+  ])('composer focus and submission respect device classification: $name', async ({ userAgent, platform, maxTouchPoints, automatic, mobile }) => {
     for (const [name, value] of Object.entries({ userAgent, platform, maxTouchPoints })) {
       const descriptor = Object.getOwnPropertyDescriptor(navigator, name)
       Object.defineProperty(navigator, name, { configurable: true, value })
@@ -1675,7 +1688,14 @@ describe('running and lock semantics', () => {
     for (const gesture of ['click', 'enter'] as const) {
       writeDraft(shell, `send by ${gesture}`)
       act(() => { textarea.focus() })
-      if (gesture === 'click') {
+      if (gesture === 'click' || mobile) {
+        // Touch keyboards have no Shift+Enter: Enter edits and the button sends.
+        if (gesture === 'enter') {
+          const before = sink.mock.calls.length
+          fireEvent.keyDown(textarea, { key: 'Enter' })
+          expect(sink).toHaveBeenCalledTimes(before)
+          writeDraft(shell, `send by ${gesture}`)
+        }
         fireEvent.mouseDown(button, { button: 0 })
         fireEvent.click(button)
       } else {
@@ -1698,7 +1718,8 @@ describe('running and lock semantics', () => {
     fireEvent.keyDown(textarea, { key: 'Enter' })
     await act(async () => {})
     expect(shell.snapshot.phase).toBe('claimed')
-    expect(shell.snapshot.draft).toBe('/goal ')
+    // A touch keyboard's Enter edits even a claimed command; its Send button submits.
+    expect(shell.snapshot.draft).toBe(mobile ? '/goal \n' : '/goal ')
     expect(document.activeElement).toBe(textarea)
   })
 
