@@ -216,7 +216,7 @@ it('keeps mobile submission keyboard navigation in the composer while retaining 
     { engine: chromium, mobile: true, submission: 'Enter' },
     { engine: webkit, mobile: true, submission: 'Send' },
     { engine: webkit, mobile: true, submission: 'Enter' },
-  ]) {
+  ] as const) {
     const scaffold = await launchWebScaffold({
       replayFixture: fileURLToPath(new URL('../../../snapshots/web/live-interactions/session.v3.jsonl', import.meta.url)),
       compareReplaySession: false,
@@ -242,10 +242,16 @@ it('keeps mobile submission keyboard navigation in the composer while retaining 
           await page.goto(scaffold.authenticatedUrl)
           await connectFreshWorkspace(page, scaffold.workspaceCwd, `submission-${platform}`)
           const input = page.locator('[data-composer-input][contenteditable="true"]')
-          await input.fill('Reply with a one-sentence description of event sourcing, then stop.')
+          const draft = 'Reply with a one-sentence description of event sourcing, then stop.'
+          await input.fill(draft)
           expect(await input.evaluate(element => document.activeElement === element)).toBe(true)
-          if (submission === 'Enter') await page.keyboard.press('Enter')
-          else {
+          if (submission === 'Enter') {
+            // A touch keyboard has no Shift+Enter: Enter edits, the button sends.
+            await page.keyboard.press('Enter')
+            await expect.poll(() => input.innerText()).toBe(`${draft}\n`)
+            expect(finished).toBe(false)
+            await page.getByRole('button', { name: 'Send message', exact: true }).tap()
+          } else {
             const send = page.getByRole('button', { name: 'Send message', exact: true })
             if (mobile) await send.tap()
             else await send.click()
