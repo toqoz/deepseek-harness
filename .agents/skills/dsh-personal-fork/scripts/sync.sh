@@ -132,6 +132,13 @@ done
 git -C "$build_path" reset --soft "$UPSTREAM_REF"
 git -C "$build_path" commit --no-verify -q -m "$message"
 new_commit=$(git -C "$build_path" rev-parse HEAD)
+new_tree=$(git -C "$build_path" rev-parse 'HEAD^{tree}')
+current_tree=$(git rev-parse --verify "refs/heads/$INTEGRATION_BRANCH^{tree}" 2>/dev/null || true)
+if [ "$new_tree" = "$current_tree" ] && [ "$message" = "$(git log -1 --format=%s "$INTEGRATION_BRANCH" 2>/dev/null || true)" ]; then
+  echo "$INTEGRATION_BRANCH already matches upstream and every change; nothing to rebuild"
+  git worktree remove --force "$build_path"
+  exit 0
+fi
 old_commit=$(git rev-parse --verify "refs/heads/$INTEGRATION_BRANCH" 2>/dev/null || true)
 if [ -n "$old_commit" ]; then
   git update-ref "refs/heads/$INTEGRATION_BRANCH" "$new_commit" "$old_commit"
