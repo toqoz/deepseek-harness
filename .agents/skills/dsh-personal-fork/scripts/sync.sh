@@ -84,27 +84,62 @@ if [ "${#changes[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# A squashed branch tip whose subject is one bare gist URL is an integration
+# commit, never a personal change.
+is_integration_commit() {
+  case "$(git log -1 --format=%s "$1")" in
+    https://gist.github.com/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Each change is one commit. Checking before the rebase names the offending
 # branch before history is rewritten under it.
+#
+# Upstream replaces its single integration commit instead of appending, so a
+# change branch can still sit on the tip upstream has since rewritten. That
+# commit is skipped when counting here and dropped by the rebase below.
+bases=()
+stale_counts=()
 for branch in "${changes[@]}"; do
-  commits=$(git rev-list --count "$UPSTREAM_REF..$branch")
-  if [ "$commits" -ne 1 ]; then
-    echo "sync.sh: $branch holds $commits commits on $UPSTREAM_REF; a change holds exactly one" >&2
+  own=0
+  base=
+  stale=0
+  while IFS= read -r commit; do
+    if [ "$own" -eq 0 ] && is_integration_commit "$commit"; then
+      stale=$((stale + 1))
+      continue
+    fi
+    own=$((own + 1))
+    base=$(git rev-parse "$commit~1")
+  done < <(git rev-list --reverse "$UPSTREAM_REF..$branch")
+  if [ "$own" -ne 1 ]; then
+    echo "sync.sh: $branch holds $own personal commits on $UPSTREAM_REF; a change holds exactly one" >&2
     exit 1
   fi
-  if [ -n "$(git rev-list --merges "$UPSTREAM_REF..$branch")" ]; then
+  if [ -n "$(git rev-list --merges "$base..$branch")" ]; then
     echo "sync.sh: $branch contains a merge commit; a change holds one non-merge commit" >&2
     exit 1
   fi
+  bases+=("$base")
+  stale_counts+=("$stale")
 done
 
+index=0
 for branch in "${changes[@]}"; do
-  echo "rebasing $branch onto $UPSTREAM_REF"
+  base=${bases[$index]}
+  stale=${stale_counts[$index]}
+  index=$((index + 1))
+  if [ "$stale" -gt 0 ]; then
+    echo "rebasing $branch onto $UPSTREAM_REF, dropping $stale stale upstream commit(s)"
+  else
+    echo "rebasing $branch onto $UPSTREAM_REF"
+  fi
   path="$tmp_root/rebase-$(printf '%s' "$branch" | tr '/' '-')"
   worktrees+=("$path")
   # The branch is checked out here, so `git rebase --continue` moves it for us.
   git worktree add --force "$path" "$branch" >/dev/null
-  if ! git -C "$path" rebase "$UPSTREAM_REF"; then
+  if ! git -C "$path" rebase --onto "$UPSTREAM_REF" "$base"; then
     keep_worktrees=true
     echo "sync.sh: $branch conflicts; resolve it in $path, run 'git -C $path rebase --continue', then remove that worktree and rerun" >&2
     exit 1

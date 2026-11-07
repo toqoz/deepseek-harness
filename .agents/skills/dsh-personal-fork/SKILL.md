@@ -19,6 +19,7 @@ This checkout is a personal fork of [shiguredo/deepseek-harness](https://github.
 Hard rules:
 
 - A `toqoz/feat/*` branch holds exactly one non-merge commit with a normal commit message.
+- A commit whose subject is one bare gist URL is an integration commit, never a personal change.
 - `toqoz/main` holds exactly one commit on upstream and is rebuilt by the script. Never commit on it by hand.
 - The `toqoz/main` commit message is one bare gist URL and nothing else.
 - The gist records what changed and why in Japanese, concisely. It summarizes and points here; this file is the only home of the procedure.
@@ -94,11 +95,13 @@ pnpm exec vitest run packages/client packages/host
 pnpm run typecheck
 ```
 
+`upstream/shiguredo` is a single squashed commit whose subject is one bare gist URL, and upstream replaces it on every update instead of appending. A change branch therefore still points at the previous upstream tip until the script rebases it. The script skips that stale tip when counting a change's commits and rebases only the change's own commit onto the current upstream, so importing needs no manual step; a conflicting rebase still leaves the temporary worktree.
+
 The script:
 
 1. fetches `upstream/shiguredo`;
-2. refuses unless every `toqoz/feat/*` holds exactly one non-merge commit on upstream;
-3. rebases each branch in a temporary worktree, leaving a worktree behind when a rebase conflicts;
+2. refuses unless every `toqoz/feat/*` holds exactly one non-merge personal commit, not counting a stale upstream integration commit it sits on;
+3. rebases each branch onto upstream in a temporary worktree, dropping that stale commit, and leaving a worktree behind when a rebase conflicts;
 4. rebuilds `toqoz/main` as upstream plus one squash commit of every `toqoz/feat/*` in a temporary worktree, reusing the gist URL of the previous run and discarding the rebuild when two branches overlap;
 5. with `--push`, publishes each branch with `--force-with-lease` and `--no-verify`.
 
