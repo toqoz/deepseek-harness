@@ -14,7 +14,17 @@ CLI_ENTRY=apps/cli/lib/bin.js
 
 GIT=${DSH_GIT:-git}
 NODE=${DSH_NODE:-node}
-PNPM=${DSH_PNPM:-pnpm}
+
+# pnpm comes from the repository, not from here: package.json's `packageManager`
+# pins the version and corepack resolves exactly it, so this script keeps no
+# pnpm version of its own. DSH_PNPM names an explicit binary instead.
+if [ -n "${DSH_PNPM:-}" ]; then
+  PNPM=("$DSH_PNPM")
+elif command -v corepack >/dev/null 2>&1; then
+  PNPM=(corepack pnpm)
+else
+  PNPM=(pnpm)
+fi
 
 HOME_DIR=${DEEPSEEK_HARNESS_HOME:-$HOME/.local/share/deepseek-harness}
 BUILDS=$HOME_DIR/builds
@@ -109,9 +119,11 @@ VERSION=$("$NODE" -p "require('$manifest').version")
 echo "==> pnpm install --frozen-lockfile"
 (
   cd "$attempt"
-  "$PNPM" install --frozen-lockfile
+  PATH=$(dirname "$NODE"):$PATH
+  export PATH
+  "${PNPM[@]}" install --frozen-lockfile
   echo "==> pnpm run build"
-  "$PNPM" run build
+  "${PNPM[@]}" run build
 )
 
 echo "==> smoke: built CLI --version and web --help"

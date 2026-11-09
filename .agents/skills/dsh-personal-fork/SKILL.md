@@ -133,7 +133,9 @@ Publishing skips the repository pre-push hook because the ops worktree has no `p
 - it publishes atomically by replacing the `ready` symlink and records the commit in `ready/.dsh-rev`;
 - a failed build leaves the previous generation published.
 
-`scripts/restart.sh` kickstarts `gui/<uid>/deepseek-harness`; it fails when the job is not loaded. Node, pnpm, and git come from `PATH` (`DSH_NODE`, `DSH_PNPM`, `DSH_GIT` override), because Nix provides them.
+`scripts/restart.sh` kickstarts `gui/<uid>/deepseek-harness`; it fails when the job is not loaded.
+
+The build takes no toolchain version of its own. Node comes from `DSH_NODE` (else `node` on `PATH`; Nix provides the pinned official build). pnpm comes from the repository: `package.json` pins `pnpm@11.28.5` in `packageManager`, and the script runs `corepack pnpm`, so corepack resolves exactly that version; `DSH_PNPM` names an explicit binary instead. `DSH_GIT` overrides git.
 
 Run the script tests from this worktree:
 
