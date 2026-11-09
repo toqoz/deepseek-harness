@@ -2,8 +2,9 @@
 
 This orphan branch holds the tooling for the personal fork of
 [shiguredo/deepseek-harness](https://github.com/shiguredo/deepseek-harness). It
-is never merged into the code; `toqoz/main` is upstream plus the personal
-changes, and `toqoz/feat/*` holds one change each.
+is never merged into the code; `toqoz/develop` is upstream plus the personal
+changes, `toqoz/main` is the verified `toqoz/develop` commit, and
+`toqoz/feat/*` holds one change each.
 
 It is mounted in the worktree `.git/wt/ops`. Recreate it after a fresh clone:
 

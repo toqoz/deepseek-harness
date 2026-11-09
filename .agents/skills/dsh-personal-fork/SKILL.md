@@ -1,6 +1,6 @@
 ---
 name: dsh-personal-fork
-description: Use when creating, updating, rebasing, or publishing a personal change in the toqoz/deepseek-harness fork, when importing a new shiguredo upstream into it, or when resolving the fork's branch conflicts.
+description: Use when creating, updating, rebasing, staging, verifying, or publishing a personal change in the toqoz/deepseek-harness fork, when importing a new shiguredo upstream into it, or when resolving the fork's branch conflicts.
 ---
 
 # Personal fork operation
@@ -13,15 +13,17 @@ This checkout is a personal fork of [shiguredo/deepseek-harness](https://github.
 | --- | --- |
 | `upstream/shiguredo` | The only upstream. Fetched from `https://github.com/shiguredo/deepseek-harness`. |
 | `toqoz/feat/<slug>` | One personal change: exactly one commit on the current upstream, with an ordinary commit message. |
-| `toqoz/main` | Integration branch: upstream plus one commit holding every `toqoz/feat/*`. Its message is one bare gist URL. |
+| `toqoz/develop` | Staging branch: upstream plus one commit holding every `toqoz/feat/*`. Rebuilt by the script; the feature path installs and verifies it before publishing, the import path publishes it directly. |
+| `toqoz/main` | Integration branch: the published `toqoz/develop` commit. Its message is one bare gist URL. |
 | `toqoz/ops` | Orphan branch holding this file and `sync.sh`. Never merged into the code. |
 
 Hard rules:
 
 - A `toqoz/feat/*` branch holds exactly one non-merge commit with a normal commit message.
 - A commit whose subject is one bare gist URL is an integration commit, never a personal change.
-- `toqoz/main` holds exactly one commit on upstream and is rebuilt by the script. Never commit on it by hand.
-- The `toqoz/main` commit message is one bare gist URL and nothing else.
+- `toqoz/develop` and `toqoz/main` each hold exactly one commit on upstream and are rebuilt or moved by the script. Never commit on them by hand.
+- `toqoz/main` is the same commit as `toqoz/develop` whenever it moves. `--push` (the import path) moves it without an install check; `--promote` (the feature path) moves it only for a `deepseek-harness-install` build of that commit and checks `ready/.dsh-rev`.
+- The integration commit message is one bare gist URL and nothing else; the staging and integration commits are the same commit after promotion.
 - The gist records what changed and why in Japanese, concisely. It summarizes and points here; this file is the only home of the procedure.
 - A human edit to the gist that changes the procedure must land in this file in the same run.
 - Nothing on `toqoz/ops` is rebased or merged; it has no common ancestor with upstream.
@@ -46,18 +48,26 @@ git switch -c toqoz/feat/<slug> upstream/shiguredo
 # make the change, update its tests and docs, verify
 git add -A
 git commit -m "<commit message>"
-.git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --push
+.git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh
 ```
 
-Then bring the checkout you run from up to date and verify:
+`sync.sh` (also spelled `--stage`) rebases every change onto upstream and rebuilds `toqoz/develop` as one squash commit. It touches neither `toqoz/main` nor the remote; that is the feature path. Routine publishing, including the upstream import, uses `--push` instead, which moves `main` to the same commit.
+
+## Verify and promote
+
+The staged generation is what you install and check; promotion then moves that exact commit, so a verified build becomes the released one without another install. A `--push` run already published `main` at the staging commit, so `--promote` has nothing left to do.
 
 ```sh
-git reset --hard toqoz/main
-pnpm exec vitest run packages/client packages/host
-pnpm run typecheck
+git switch toqoz/develop
+git reset --hard toqoz/develop
+deepseek-harness-install          # builds this commit into a new ready generation
+# … verify the running app …
+.git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --promote
 ```
 
-`sync.sh` never moves the caller's checkout; the reset is what applies the rebuild.
+`--promote` fast-forwards `toqoz/main` to the `toqoz/develop` commit and publishes both. It does not fetch, rebase, or rebuild, and it refuses unless `ready/.dsh-rev` (under `DEEPSEEK_HARNESS_HOME`, default `~/.local/share/deepseek-harness`) equals the staging commit, so on the feature path an uninstalled or rebuilt staging commit cannot reach `main`. `--force` skips that check.
+
+Because the promoted commit is unchanged, `.dsh-rev` still identifies `toqoz/main` afterwards: no reinstall and no service restart are needed. A change made after verification means a new staging commit and a new install.
 
 ## Change an existing branch
 
@@ -66,30 +76,31 @@ git switch toqoz/feat/<slug>
 # edit and verify
 git add -A
 git commit --amend --no-edit
-.git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --push
-git reset --hard toqoz/main
+.git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh
 ```
 
 ## Update the gist
 
-`toqoz/main` keeps the gist URL of the previous run. Rewrite the gist only when the personal delta changes materially, then rebuild with the new URL:
+`toqoz/develop` keeps the gist URL of the previous run. Rewrite the gist only when the personal delta changes materially, then rebuild the staging commit with the new URL:
 
 ```sh
 gh gist edit <id> --filename deepseek-harness-toqoz-fork.md deepseek-harness-toqoz-fork.md   # last path is the local file
 # or, for a new gist
 gh gist create --public --desc "個人 fork の変更" --filename deepseek-harness-toqoz-fork.md - < deepseek-harness-toqoz-fork.md
-.git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --message <gist-url> --push
+.git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --message <gist-url>
+.git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --promote --force
 ```
 
 The gist is public; visibility is fixed at creation, so create a new gist (and repoint the commit message) if it was made secret by mistake. Write it in Japanese, short and factual: what changed, why, and how it was verified. Sections are optional; do not pad it.
 
 ## Import upstream
 
-The scheduled task runs this; a human runs it the same way.
+The scheduled task runs this; a human runs it the same way. It publishes the change branches, `toqoz/develop`, and `toqoz/main` at the same commit, so the release follows the import without an install step.
 
 ```sh
 git fetch upstream shiguredo --prune
 .git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --push
+git switch toqoz/main
 git reset --hard toqoz/main
 pnpm exec vitest run packages/client packages/host
 pnpm run typecheck
@@ -102,10 +113,11 @@ The script:
 1. fetches `upstream/shiguredo`;
 2. refuses unless every `toqoz/feat/*` holds exactly one non-merge personal commit, not counting a stale upstream integration commit it sits on;
 3. rebases each branch onto upstream in a temporary worktree, dropping that stale commit, and leaving a worktree behind when a rebase conflicts;
-4. rebuilds `toqoz/main` as upstream plus one squash commit of every `toqoz/feat/*` in a temporary worktree, reusing the gist URL of the previous run and discarding the rebuild when two branches overlap;
-5. with `--push`, publishes each branch with `--force-with-lease` and `--no-verify`.
+4. rebuilds `toqoz/develop` as upstream plus one squash commit of every `toqoz/feat/*` in a temporary worktree, reusing the gist URL of the previous run and discarding the rebuild when two branches overlap;
+5. with `--push`, moves `toqoz/main` to the rebuilt staging commit and publishes the change branches, `toqoz/develop`, and `toqoz/main` with `--force-with-lease` and `--no-verify`;
+6. with `--promote`, after checking the installed generation, moves `toqoz/main` to the already-built staging commit and publishes `toqoz/develop` and `toqoz/main` without fetching or rebuilding.
 
-Publishing skips the repository pre-push hook because the ops worktree has no `package.json`; the reset-and-verify step above is the gate instead, and it runs after the push.
+Publishing skips the repository pre-push hook because the ops worktree has no `package.json`; the checkout-and-verify step is the gate instead. `--push` releases `main` before the post-import tests run, which is why those tests must run and be reported; `--promote` checks the installed generation before the push.
 
 ## Publish and credentials
 
