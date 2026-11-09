@@ -22,4 +22,17 @@ directory is the checkout, so a new session starts with the branch model in
 context instead of committing straight to a code branch.
 
 The procedure is `.agents/skills/dsh-personal-fork/SKILL.md`; the entry point is
-`scripts/sync.sh`.
+`scripts/sync.sh`. The Nix configuration (`~/src/github.com/toqoz/config`)
+provides the pinned Node and pnpm, the launchd service, and the data
+directories; this branch owns the app build (`scripts/install.sh`), the
+generation store, and the restart (`scripts/restart.sh`).
+
+Script tests run from this worktree:
+
+```sh
+node --test t/*.test.mts
+```
+
+The main checkout excludes the skill symlink through `.git/info/exclude`, which
+also hides new files under this skill in every worktree. Add them with
+`git add -f`.
