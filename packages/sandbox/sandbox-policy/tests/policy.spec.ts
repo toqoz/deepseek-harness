@@ -11,13 +11,21 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SESSION_FORMAT_VERSION, Session, type SessionId } from '@deepseek-ai/dsh-session'
-import SandboxPolicyService, { SANDBOX_MODES, setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
+import SandboxPolicyService, { SANDBOX_MODES, setSandboxMode, type SandboxPolicyRequest } from '@deepseek-ai/dsh-sandbox-policy'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt, { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { brandString } from '@deepseek-ai/dsh-brand'
 
 async function mounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string; additionalWritableRoots?: string[] } = {}) {
   const ctx = new Context()
+  await ctx.plugin(SessionProjectionRegistry)
+  await ctx.plugin(SandboxPolicyService, config)
+  return ctx
+}
+
+async function promptMounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string; additionalWritableRoots?: string[] } = {}): Promise<Context> {
+  const ctx = new Context()
+  await ctx.plugin(SystemPrompt)
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SandboxPolicyService, config)
   return ctx
@@ -276,14 +284,6 @@ describe('session writable-root registrations', () => {
 })
 
 describe('sandbox:policy request context', () => {
-  async function promptMounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string; additionalWritableRoots?: string[] } = {}): Promise<Context> {
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(SessionProjectionRegistry)
-    await ctx.plugin(SandboxPolicyService, config)
-    return ctx
-  }
-
   it.each(['read-only', 'workspace-write', 'danger-full-access'] as const)('renders the exact %s policy without a capability inventory', async (mode) => {
     const ctx = await promptMounted({ mode, workspaceRoot: '/fallback' })
     const workspaceRoot = '/projects/../projects/current'
@@ -361,6 +361,107 @@ describe('sandbox:policy request context', () => {
 
     expect(await policyContext(ctx, resumed)).toContain('workspace-write')
     expect((await ctx.systemPrompt.assemble()).contexts.find(context => context.name === 'sandbox:policy')?.text).toBe('')
+  })
+})
+
+describe('writable-roots providers', () => {
+  it('merges provider roots after the configured roots and freezes the result', async () => {
+    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback', additionalWritableRoots: ['/configured'] })
+    ctx.sandboxPolicy.registerWritableRootsProvider({ rootsFor: () => ['/roots/a', '/roots/b'] })
+
+    const policy = ctx.sandboxPolicy.resolve()
+    expect(policy).toEqual({
+      mode: 'workspace-write',
+      workspaceRoot: '/fallback',
+      additionalWritableRoots: ['/configured', '/roots/a', '/roots/b'],
+    })
+    expect(Object.isFrozen(policy.additionalWritableRoots)).toBe(true)
+  })
+
+  it('deduplicates configured and provider roots first-wins in registration order', async () => {
+    const ctx = await mounted({ mode: 'workspace-write', additionalWritableRoots: ['/shared'] })
+    ctx.sandboxPolicy.registerWritableRootsProvider({ rootsFor: () => ['/shared', '/roots/a'] })
+    ctx.sandboxPolicy.registerWritableRootsProvider({ rootsFor: () => ['/roots/a', '/roots/b'] })
+
+    expect(ctx.sandboxPolicy.resolve().additionalWritableRoots).toEqual(['/shared', '/roots/a', '/roots/b'])
+  })
+
+  it('treats an empty or undefined contribution as no extra grant', async () => {
+    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback', additionalWritableRoots: ['/configured'] })
+    ctx.sandboxPolicy.registerWritableRootsProvider({ rootsFor: () => [] })
+    ctx.sandboxPolicy.registerWritableRootsProvider({ rootsFor: () => undefined })
+
+    expect(ctx.sandboxPolicy.resolve().additionalWritableRoots).toEqual(['/configured'])
+  })
+
+  it('keeps the configured-only policy when no provider is registered', async () => {
+    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback', additionalWritableRoots: ['/configured'] })
+    expect(ctx.sandboxPolicy.resolve()).toEqual({
+      mode: 'workspace-write',
+      workspaceRoot: '/fallback',
+      additionalWritableRoots: ['/configured'],
+    })
+  })
+
+  it('removes a disposed provider and ignores repeated disposal', async () => {
+    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback' })
+    const dispose = ctx.sandboxPolicy.registerWritableRootsProvider({ rootsFor: () => ['/roots/a'] })
+    expect(ctx.sandboxPolicy.resolve().additionalWritableRoots).toEqual(['/roots/a'])
+
+    dispose()
+    dispose()
+    expect(ctx.sandboxPolicy.resolve()).toEqual({ mode: 'workspace-write', workspaceRoot: '/fallback' })
+  })
+
+  it('resolves each session against its own provider grant', async () => {
+    const grants = new Map([['sess-a', ['/roots/a']], ['sess-b', ['/roots/b']]])
+    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback' })
+    ctx.sandboxPolicy.registerWritableRootsProvider({
+      rootsFor: ({ session }) => session === undefined ? undefined : grants.get(session.id),
+    })
+
+    expect(ctx.sandboxPolicy.resolve({ session: session('sess-a', '/projects/a') }).additionalWritableRoots).toEqual(['/roots/a'])
+    expect(ctx.sandboxPolicy.resolve({ session: session('sess-b', '/projects/b') }).additionalWritableRoots).toEqual(['/roots/b'])
+  })
+
+  it('consults providers for agentless calls', async () => {
+    const requests: SandboxPolicyRequest[] = []
+    const ctx = await mounted({ mode: 'workspace-write', workspaceRoot: '/fallback' })
+    ctx.sandboxPolicy.registerWritableRootsProvider({
+      rootsFor: (request) => {
+        requests.push(request)
+        return undefined
+      },
+    })
+
+    expect(ctx.sandboxPolicy.resolve()).toEqual({ mode: 'workspace-write', workspaceRoot: '/fallback' })
+    expect(requests).toEqual([{}])
+  })
+
+  it.each(['relative/root', '/invalid\0root'])('fails the call when a provider returns an invalid root: %j', async (root) => {
+    const ctx = await mounted({ mode: 'workspace-write' })
+    ctx.sandboxPolicy.registerWritableRootsProvider({ rootsFor: () => [root] })
+    expect(() => ctx.sandboxPolicy.resolve()).toThrow('sandbox-policy: writable directories must be absolute execution-world paths without NUL bytes')
+  })
+
+  it('fails the call when a provider throws', async () => {
+    const ctx = await mounted({ mode: 'workspace-write' })
+    ctx.sandboxPolicy.registerWritableRootsProvider({
+      rootsFor: () => {
+        throw new Error('grant lookup failed')
+      },
+    })
+    expect(() => ctx.sandboxPolicy.resolve()).toThrow('grant lookup failed')
+  })
+
+  it('renders provider roots as additional writable directories', async () => {
+    const ctx = await promptMounted({ mode: 'workspace-write', workspaceRoot: '/fallback' })
+    const active = session('sess-provider-context', '/projects/current')
+    ctx.sandboxPolicy.registerWritableRootsProvider({ rootsFor: () => ['/roots/a'] })
+
+    expect(await policyContext(ctx, active)).toBe(
+      `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify('/projects/current')}. Additional writable directories: ["/roots/a"]. On Windows, these additional grants apply to file tools only, not sandboxed processes. Some platform temporary areas may also be writable.`,
+    )
   })
 })
 

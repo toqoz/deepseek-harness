@@ -40,7 +40,7 @@ type SandboxEnforcement = 'full' | 'partial'
 
 ## Per-call policy
 
-The complete execution policy is resolved and carried per capability call. It includes `danger-full-access` so a consumer can resolve policy once before deciding whether to bypass confinement. Normal tool calls derive `workspaceRoot` from the calling session's immutable cwd; deployment configuration supplies the agentless fallback and shared additional write grants. Live Session registrations add effect-scoped directories to subsequent resolutions. The resolver preserves absolute execution-world spelling. Enforcing providers canonicalize the root where the files exist, so a cwd containing `symlink/..` identifies the directory where the paired subprocess provider actually runs.
+The complete execution policy is resolved and carried per capability call. It includes `danger-full-access` so a consumer can resolve policy once before deciding whether to bypass confinement. Normal tool calls derive `workspaceRoot` from the calling session's immutable cwd; deployment configuration supplies the agentless fallback and shared additional write grants. Live Session registrations and registered provider contributions add effect-scoped directories to subsequent resolutions. The resolver preserves absolute execution-world spelling. Enforcing providers canonicalize the root where the files exist, so a cwd containing `symlink/..` identifies the directory where the paired subprocess provider actually runs.
 
 ```ts type-equiv
 /**
@@ -81,6 +81,30 @@ interface SandboxPolicyRequest {
   session?: Session
   /** Explicit approved mode override, which outranks session policy. */
   mode?: SandboxMode
+}
+```
+
+A host that owns per-session write grants registers a `WritableRootsProvider` with `ctx.sandboxPolicy.registerWritableRootsProvider()` instead of extending deployment configuration. The resolver appends each provider's roots after the configured ones, deduplicates first-wins, and freezes the result; providers are consulted synchronously on every resolve, including agentless calls, and their grants stay in host state rather than the Session log. Providers are host-trusted because a mounted plugin already runs with host authority, and their roots grant nothing under `read-only`.
+
+```ts type-equiv
+/**
+ * One host plugin's per-call source of extra writable directories, registered
+ * through {@link SandboxPolicyService.registerWritableRootsProvider}. A host
+ * that owns its own per-session grants supplies them here instead of through
+ * deployment configuration, so the grants follow that host's state without
+ * being recorded in the Session.
+ */
+interface WritableRootsProvider {
+  /**
+   * Extra physical absolute execution-world directories for this call, which
+   * the resolver merges after the configured roots and deduplicates
+   * first-wins. Entries grant nothing outside `workspace-write`, and the
+   * enforcing host rejects missing, non-directory, or symlinked paths on each
+   * call.
+   * @param request - the policy request being resolved.
+   * @returns extra roots, or `undefined` when this call grants none.
+   */
+  rootsFor(request: SandboxPolicyRequest): readonly string[] | undefined
 }
 ```
 
@@ -205,14 +229,25 @@ The sandbox-policy service (`ctx.sandboxPolicy`). Owns the deployment default mo
 
 ```ts cordis-catalog
 /**
+ * Register a per-session source of extra writable directories. Providers are
+ * host-trusted, because a plugin already runs with host authority; their
+ * grants reach enforcement exactly like the configured roots and grant
+ * nothing outside `workspace-write`.
+ * @param provider - the source {@link resolve} consults on every call.
+ * @returns a disposer that removes the provider; calling it again has no effect.
+ */
+registerWritableRootsProvider(provider: WritableRootsProvider): () => void
+
+/**
  * Resolve the complete policy for one capability call. An approved explicit
  * mode outranks the session's last `sandbox/mode` event, which outranks the
  * deployment default. A session cwd is its workspace-write boundary; the
  * configured root is the fallback for agentless calls and sessions without a
- * cwd. Configured extra roots and this Session's active registrations are
- * snapshotted together; existing operations and processes keep their policy.
+ * cwd. Configured extra roots, this Session's active registrations, and every
+ * registered provider's contribution are snapshotted together; existing
+ * operations and processes keep their policy.
  * @param request - optional session and approved mode override.
- * @returns the fully resolved per-call mode and absolute workspace root.
+ * @returns the fully resolved per-call mode, absolute workspace root, and frozen extra roots.
  * @throws `SandboxInvalidRootError` (`SANDBOX_INVALID_ROOT`) when the session's recorded cwd is
  *   relative or contains a NUL byte.
  */

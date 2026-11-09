@@ -40,7 +40,7 @@ type SandboxEnforcement = 'full' | 'partial'
 
 ## 逐调用策略
 
-完整执行策略会按每次能力调用解析并携带。它包括 `danger-full-access`，因此消费方可以只解析一次策略，再决定是否绕过约束。普通工具调用从调用会话的不可变 cwd 派生 `workspaceRoot`；部署配置提供无 agent 调用的回退值和共享的额外写入授权。存活 Session 的注册为后续解析添加 effect 生命周期内的目录授权。解析器保留执行环境中的绝对路径写法。执行限制的提供方在文件实际存在的位置规范化根目录，因此包含 `symlink/..` 的 cwd 会标识配套子进程提供方实际运行的目录。
+完整执行策略会按每次能力调用解析并携带。它包括 `danger-full-access`，因此消费方可以只解析一次策略，再决定是否绕过约束。普通工具调用从调用会话的不可变 cwd 派生 `workspaceRoot`；部署配置提供无 agent 调用的回退值和共享的额外写入授权。存活 Session 的注册与已注册提供方的贡献会为后续解析添加 effect 生命周期内的目录授权。解析器保留执行环境中的绝对路径写法。执行限制的提供方在文件实际存在的位置规范化根目录，因此包含 `symlink/..` 的 cwd 会标识配套子进程提供方实际运行的目录。
 
 ```ts type-equiv
 /**
@@ -81,6 +81,30 @@ interface SandboxPolicyRequest {
   session?: Session
   /** Explicit approved mode override, which outranks session policy. */
   mode?: SandboxMode
+}
+```
+
+拥有逐会话写入授权的宿主注册一个 `WritableRootsProvider`（通过 `ctx.sandboxPolicy.registerWritableRootsProvider()`），而不是扩展部署配置。解析器把每个提供方的根目录接在配置的根目录之后，按先到先得去重并冻结结果；提供方在每次 resolve 时同步调用（包括无 agent 调用），其授权保存在宿主状态而非会话日志中。提供方是宿主可信的，因为已挂载的插件本就以宿主权限运行；这些根目录在 `read-only` 下不授予任何权限。
+
+```ts type-equiv
+/**
+ * One host plugin's per-call source of extra writable directories, registered
+ * through {@link SandboxPolicyService.registerWritableRootsProvider}. A host
+ * that owns its own per-session grants supplies them here instead of through
+ * deployment configuration, so the grants follow that host's state without
+ * being recorded in the Session.
+ */
+interface WritableRootsProvider {
+  /**
+   * Extra physical absolute execution-world directories for this call, which
+   * the resolver merges after the configured roots and deduplicates
+   * first-wins. Entries grant nothing outside `workspace-write`, and the
+   * enforcing host rejects missing, non-directory, or symlinked paths on each
+   * call.
+   * @param request - the policy request being resolved.
+   * @returns extra roots, or `undefined` when this call grants none.
+   */
+  rootsFor(request: SandboxPolicyRequest): readonly string[] | undefined
 }
 ```
 
@@ -205,14 +229,25 @@ The sandbox-policy service (`ctx.sandboxPolicy`). Owns the deployment default mo
 
 ```ts cordis-catalog
 /**
+ * Register a per-session source of extra writable directories. Providers are
+ * host-trusted, because a plugin already runs with host authority; their
+ * grants reach enforcement exactly like the configured roots and grant
+ * nothing outside `workspace-write`.
+ * @param provider - the source {@link resolve} consults on every call.
+ * @returns a disposer that removes the provider; calling it again has no effect.
+ */
+registerWritableRootsProvider(provider: WritableRootsProvider): () => void
+
+/**
  * Resolve the complete policy for one capability call. An approved explicit
  * mode outranks the session's last `sandbox/mode` event, which outranks the
  * deployment default. A session cwd is its workspace-write boundary; the
  * configured root is the fallback for agentless calls and sessions without a
- * cwd. Configured extra roots and this Session's active registrations are
- * snapshotted together; existing operations and processes keep their policy.
+ * cwd. Configured extra roots, this Session's active registrations, and every
+ * registered provider's contribution are snapshotted together; existing
+ * operations and processes keep their policy.
  * @param request - optional session and approved mode override.
- * @returns the fully resolved per-call mode and absolute workspace root.
+ * @returns the fully resolved per-call mode, absolute workspace root, and frozen extra roots.
  * @throws `SandboxInvalidRootError` (`SANDBOX_INVALID_ROOT`) when the session's recorded cwd is
  *   relative or contains a NUL byte.
  */

@@ -1263,6 +1263,11 @@
     },
     {
       "doc": "docs/subsystems/sandbox.md",
+      "symbol": "WritableRootsProvider",
+      "source": "packages/sandbox/sandbox-policy/src/index.ts"
+    },
+    {
+      "doc": "docs/subsystems/sandbox.md",
       "symbol": "RunnerFailureRule",
       "source": "packages/sandbox/sandbox/src/index.ts"
     },

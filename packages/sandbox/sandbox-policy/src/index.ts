@@ -2,11 +2,11 @@
  * The sandbox POLICY home (`ctx.sandboxPolicy`): the single owner of the
  * deployment's sandbox fallbacks plus per-session resolution: the file-effect
  * {@link SandboxMode}, the `workspace-write` root, the explicit extra writable
- * directories from configuration and live Session registrations, and the override
- * kit (the `sandbox/mode` event, its fold, and its write path; the fold is the
- * `sandboxMode` session-projection unit
- * registered here, while the event and write path come from
- * `./session-mode.ts`).
+ * directories (configured roots, live Session registrations, and registered
+ * {@link WritableRootsProvider} contributions), and the override kit (the
+ * `sandbox/mode` event, its fold, and its write path; the fold is the
+ * `sandboxMode` session-projection unit registered here, while the event and
+ * write path come from `./session-mode.ts`).
  * Before each agent request, the owner also contributes the resolved policy to
  * the cache-safe runtime-context snapshot. The agent loop logs that snapshot as
  * model history, so replay reconstructs the same mode and root the enforcing
@@ -41,11 +41,11 @@ function isExecutionWorldPath(path: string): boolean {
 }
 
 /**
- * Validate and detach the configured extra writable directories. They stay in
+ * Validate and detach the resolved extra writable directories. They stay in
  * their execution-world spelling here: a local host must not canonicalize a
  * remote path. The enforcing host validates each physical directory before granting.
- * @param roots - the configured extra roots, or the empty schema default.
- * @returns a frozen copy, or `undefined` when no extra grant exists.
+ * @param roots - the configured extra roots followed by provider contributions.
+ * @returns a frozen, deduplicated copy, or `undefined` when no extra grant exists.
  */
 function resolveAdditionalWritableRoots(roots: readonly string[] | undefined): readonly string[] | undefined {
   if (roots === undefined || roots.length === 0) return undefined
@@ -119,6 +119,26 @@ export interface SandboxPolicyRequest {
   mode?: SandboxMode
 }
 
+/**
+ * One host plugin's per-call source of extra writable directories, registered
+ * through {@link SandboxPolicyService.registerWritableRootsProvider}. A host
+ * that owns its own per-session grants supplies them here instead of through
+ * deployment configuration, so the grants follow that host's state without
+ * being recorded in the Session.
+ */
+export interface WritableRootsProvider {
+  /**
+   * Extra physical absolute execution-world directories for this call, which
+   * the resolver merges after the configured roots and deduplicates
+   * first-wins. Entries grant nothing outside `workspace-write`, and the
+   * enforcing host rejects missing, non-directory, or symlinked paths on each
+   * call.
+   * @param request - the policy request being resolved.
+   * @returns extra roots, or `undefined` when this call grants none.
+   */
+  rootsFor(request: SandboxPolicyRequest): readonly string[] | undefined
+}
+
 /** The sandbox-mode projection's state schema (state equals the public shape). */
 const sandboxModeStateSchema = zod.union([
   zod.literal('read-only'),
@@ -152,6 +172,7 @@ export class SandboxPolicyService extends Service {
   readonly additionalWritableRoots: readonly string[] | undefined
   /** Independently owned grants for each live Session; never restored from its log. */
   private readonly writableRootRegistrations = new WeakMap<Session, Map<symbol, string>>()
+  private readonly writableRootsProviders = new Set<WritableRootsProvider>()
   private sandboxModeProjectionHandle!: ProjectionHandle<SandboxMode | null>
 
   constructor(ctx: Context, config: Config) {
@@ -194,23 +215,39 @@ export class SandboxPolicyService extends Service {
   }
 
   /**
+   * Register a per-session source of extra writable directories. Providers are
+   * host-trusted, because a plugin already runs with host authority; their
+   * grants reach enforcement exactly like the configured roots and grant
+   * nothing outside `workspace-write`.
+   * @param provider - the source {@link resolve} consults on every call.
+   * @returns a disposer that removes the provider; calling it again has no effect.
+   */
+  registerWritableRootsProvider(provider: WritableRootsProvider): () => void {
+    this.writableRootsProviders.add(provider)
+    let active = true
+    return () => {
+      if (!active) return
+      active = false
+      this.writableRootsProviders.delete(provider)
+    }
+  }
+
+  /**
    * Resolve the complete policy for one capability call. An approved explicit
    * mode outranks the session's last `sandbox/mode` event, which outranks the
    * deployment default. A session cwd is its workspace-write boundary; the
    * configured root is the fallback for agentless calls and sessions without a
-   * cwd. Configured extra roots and this Session's active registrations are
-   * snapshotted together; existing operations and processes keep their policy.
+   * cwd. Configured extra roots, this Session's active registrations, and every
+   * registered provider's contribution are snapshotted together; existing
+   * operations and processes keep their policy.
    * @param request - optional session and approved mode override.
-   * @returns the fully resolved per-call mode and absolute workspace root.
+   * @returns the fully resolved per-call mode, absolute workspace root, and frozen extra roots.
    * @throws `SandboxInvalidRootError` (`SANDBOX_INVALID_ROOT`) when the session's recorded cwd is
    *   relative or contains a NUL byte.
    */
   resolve(request: SandboxPolicyRequest = {}): SandboxExecutionPolicy {
     const { session } = request
-    const registrations = session === undefined ? undefined : this.writableRootRegistrations.get(session)
-    const additionalWritableRoots = registrations === undefined
-      ? this.additionalWritableRoots
-      : resolveAdditionalWritableRoots([...(this.additionalWritableRoots ?? []), ...registrations.values()])
+    const additionalWritableRoots = this.additionalRootsFor(request)
     return {
       mode: request.mode ?? (session === undefined ? undefined : this.overrideOf(session)) ?? this.defaultMode,
       workspaceRoot: this.sessionWorkspaceRoot(session),
@@ -258,6 +295,31 @@ export class SandboxPolicyService extends Service {
     }, 'sandboxPolicy.registerWritableRoot()')
     // oxlint-disable-next-line typescript/no-misused-promises -- synchronous cleanup preserves the exact Cordis effect disposer
     return dispose
+  }
+
+  /**
+   * Collect this call's extra writable directories from configuration, the
+   * Session's registrations, and the registered providers. Providers run in
+   * registration order; a provider failure propagates and fails the call.
+   * @param request - the policy request being resolved.
+   * @returns the frozen resolved roots, or `undefined` when nothing was granted.
+   */
+  private additionalRootsFor(request: SandboxPolicyRequest): readonly string[] | undefined {
+    const { session } = request
+    const registrations = session === undefined ? undefined : this.writableRootRegistrations.get(session)
+    const base = registrations === undefined
+      ? this.additionalWritableRoots
+      : resolveAdditionalWritableRoots([...(this.additionalWritableRoots ?? []), ...registrations.values()])
+    if (this.writableRootsProviders.size === 0) return base
+    const granted: string[] = [...base ?? []]
+    let contributed = false
+    for (const provider of this.writableRootsProviders) {
+      const roots = provider.rootsFor(request)
+      if (roots === undefined || roots.length === 0) continue
+      contributed = true
+      granted.push(...roots)
+    }
+    return contributed ? resolveAdditionalWritableRoots(granted) : base
   }
 
   /**
