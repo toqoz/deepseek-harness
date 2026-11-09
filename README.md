@@ -23,10 +23,9 @@ context instead of committing straight to a code branch.
 
 The procedure is `.agents/skills/dsh-personal-fork/SKILL.md`; the entry point is
 `scripts/sync.sh`. The Nix configuration (`~/src/github.com/toqoz/config`)
-provides the pinned official Node, the launchd service, and the data
-directories; pnpm comes from the repository's `packageManager` lock through
-corepack. This branch owns the app build (`scripts/install.sh`), the generation
-store, and the restart (`scripts/restart.sh`).
+provides the pinned Node and pnpm, the launchd service, and the data
+directories; this branch owns the app build (`scripts/install.sh`), the
+generation store, and the restart (`scripts/restart.sh`).
 
 Script tests run from this worktree:
 
