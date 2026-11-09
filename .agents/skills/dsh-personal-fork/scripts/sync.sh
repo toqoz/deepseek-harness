@@ -13,9 +13,6 @@
 #   --promote           move toqoz/main to the installed toqoz/develop commit and
 #                       publish both (the feature path; requires a matching ready
 #                       build; --force skips that check)
-#   --install           build the rebuilt staging commit into a ready generation
-#                       and restart the service; moves a clean checkout to that
-#                       commit first (combine with --push for the import path)
 #   --message           gist URL for the rebuilt staging commit; defaults to the
 #                       current staging subject, else the integration subject
 #
@@ -34,7 +31,6 @@ HARNESS_HOME=${DEEPSEEK_HARNESS_HOME:-$HOME/.local/share/deepseek-harness}
 push=false
 promote=false
 force=false
-install=false
 message=
 
 fail() {
@@ -80,7 +76,6 @@ while [ "$#" -gt 0 ]; do
     --stage) ;;
     --push) push=true ;;
     --promote) promote=true ;;
-    --install) install=true ;;
     --force) force=true ;;
     --message)
       shift
@@ -97,34 +92,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 cd "$(git rev-parse --show-toplevel)"
-checkout=$(pwd -P)
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 
 if [ -n "$(git status --porcelain)" ]; then
   fail "working tree is not clean; commit or stash first"
 fi
-
-# Build the staged commit into a ready generation and restart the service. Nix
-# owns the toolchain and supervision; this owns the app build and generations.
-publish_generation() {
-  local staging current
-  [ "$install" = true ] || return 0
-  staging=$(git rev-parse "refs/heads/$STAGING_BRANCH")
-  current=$(cat "$HARNESS_HOME/ready/.dsh-rev" 2>/dev/null || true)
-  if [ "$current" = "$staging" ]; then
-    echo "the ready generation already runs $staging; nothing to install"
-    return 0
-  fi
-  if [ "$(git -C "$checkout" rev-parse HEAD)" != "$staging" ]; then
-    echo "==> moving $checkout to $STAGING_BRANCH ($staging)"
-    git -C "$checkout" switch --quiet "$STAGING_BRANCH"
-    git -C "$checkout" reset --hard --quiet "$staging"
-  fi
-  echo "==> building a ready generation"
-  DSH_CHECKOUT="$checkout" DEEPSEEK_HARNESS_HOME="$HARNESS_HOME" "$script_dir/install.sh"
-  echo "==> restarting the service"
-  "$script_dir/restart.sh"
-}
 
 # Promotion publishes the verified staging commit and nothing else, so it
 # neither fetches upstream nor rebuilds. Promote only what was installed and
@@ -150,7 +121,6 @@ if [ "$promote" = true ]; then
   fast_forward_integration
   echo
   publish "$STAGING_BRANCH" "$INTEGRATION_BRANCH"
-  publish_generation
   echo
   echo "the checked-out worktree keeps its files until 'git switch $INTEGRATION_BRANCH'"
   exit 0
@@ -287,7 +257,6 @@ if [ "$new_tree" = "$current_tree" ] && [ "$message" = "$(git log -1 --format=%s
     echo
     publish "${changes[@]}" "$STAGING_BRANCH" "$INTEGRATION_BRANCH"
   fi
-  publish_generation
   exit 0
 fi
 old_commit=$(git rev-parse --verify "refs/heads/$STAGING_BRANCH" 2>/dev/null || true)
@@ -314,12 +283,8 @@ if [ "$push" = true ]; then
   publish "${changes[@]}" "$STAGING_BRANCH" "$INTEGRATION_BRANCH"
 else
   echo "$INTEGRATION_BRANCH stays at $(git log -1 --format='%h %s' "$INTEGRATION_BRANCH" 2>/dev/null || echo 'no commit')"
-fi
-
-if [ "$install" = true ]; then
-  publish_generation
-elif [ "$push" != true ]; then
   echo
-  echo "next: sync.sh --install    # build and restart the staged generation"
-  echo "      sync.sh --promote    # after verification; fast-forwards $INTEGRATION_BRANCH"
+  echo "next: git switch $STAGING_BRANCH && git reset --hard $STAGING_BRANCH"
+  echo "      deepseek-harness-install   # build and run the staged generation"
+  echo "      sync.sh --promote          # after verification; fast-forwards $INTEGRATION_BRANCH"
 fi

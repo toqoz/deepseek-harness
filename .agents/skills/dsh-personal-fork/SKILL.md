@@ -5,9 +5,7 @@ description: Use when creating, updating, rebasing, staging, verifying, or publi
 
 # Personal fork operation
 
-This checkout is a personal fork of [shiguredo/deepseek-harness](https://github.com/shiguredo/deepseek-harness). The procedure and its scripts live on the orphan branch `toqoz/ops`, mounted in the worktree `.git/wt/ops`; they are never merged into the code.
-
-Two owners share this machine. The Nix configuration (`~/src/github.com/toqoz/config`) provides the toolchain (the pinned official Node and pnpm), the launchd service, and the data directories. This branch owns the app lifecycle: building a checkout into a ready generation, publishing it to `toqoz/develop`/`toqoz/main`, and restarting the service. Nix never builds the app and does not know the fork's revision.
+This checkout is a personal fork of [shiguredo/deepseek-harness](https://github.com/shiguredo/deepseek-harness). The procedure and its script live on the orphan branch `toqoz/ops`, mounted in the worktree `.git/wt/ops`; they are never merged into the code.
 
 ## Branch model
 
@@ -60,12 +58,12 @@ git commit -m "<commit message>"
 The staged generation is what you install and check; promotion then moves that exact commit, so a verified build becomes the released one without another install. A `--push` run already published `main` at the staging commit, so `--promote` has nothing left to do.
 
 ```sh
-.git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --install
+git switch toqoz/develop
+git reset --hard toqoz/develop
+deepseek-harness-install          # builds this commit into a new ready generation
 # … verify the running app …
 .git/wt/ops/.agents/skills/dsh-personal-fork/scripts/sync.sh --promote
 ```
-
-`--install` moves a clean checkout to the rebuilt `toqoz/develop`, runs `scripts/install.sh`, and restarts the service through `scripts/restart.sh`. Restarting drops live sessions, so it is a deliberate step.
 
 `--promote` fast-forwards `toqoz/main` to the `toqoz/develop` commit and publishes both. It does not fetch, rebase, or rebuild, and it refuses unless `ready/.dsh-rev` (under `DEEPSEEK_HARNESS_HOME`, default `~/.local/share/deepseek-harness`) equals the staging commit, so on the feature path an uninstalled or rebuilt staging commit cannot reach `main`. `--force` skips that check.
 
@@ -108,8 +106,6 @@ pnpm exec vitest run packages/client packages/host
 pnpm run typecheck
 ```
 
-Add `--install` to the same run to build the imported checkout and restart the service; leaving it out publishes the branches only, and the running app keeps its generation.
-
 `upstream/shiguredo` is a single squashed commit whose subject is one bare gist URL, and upstream replaces it on every update instead of appending. A change branch therefore still points at the previous upstream tip until the script rebases it. The script skips that stale tip when counting a change's commits and rebases only the change's own commit onto the current upstream, so importing needs no manual step; a conflicting rebase still leaves the temporary worktree.
 
 The script:
@@ -119,27 +115,9 @@ The script:
 3. rebases each branch onto upstream in a temporary worktree, dropping that stale commit, and leaving a worktree behind when a rebase conflicts;
 4. rebuilds `toqoz/develop` as upstream plus one squash commit of every `toqoz/feat/*` in a temporary worktree, reusing the gist URL of the previous run and discarding the rebuild when two branches overlap;
 5. with `--push`, moves `toqoz/main` to the rebuilt staging commit and publishes the change branches, `toqoz/develop`, and `toqoz/main` with `--force-with-lease` and `--no-verify`;
-6. with `--promote`, after checking the installed generation, moves `toqoz/main` to the already-built staging commit and publishes `toqoz/develop` and `toqoz/main` without fetching or rebuilding;
-7. with `--install`, builds the staging commit with `scripts/install.sh` (moving a clean checkout to it first) and restarts the launchd service with `scripts/restart.sh`.
+6. with `--promote`, after checking the installed generation, moves `toqoz/main` to the already-built staging commit and publishes `toqoz/develop` and `toqoz/main` without fetching or rebuilding.
 
 Publishing skips the repository pre-push hook because the ops worktree has no `package.json`; the checkout-and-verify step is the gate instead. `--push` releases `main` before the post-import tests run, which is why those tests must run and be reported; `--promote` checks the installed generation before the push.
-
-## Install and generation store
-
-`scripts/install.sh` builds the checkout HEAD into a generation:
-
-- it refuses a dirty checkout and a HEAD that is neither `toqoz/main` nor `toqoz/develop` (`--if-publishable` skips instead of failing);
-- it clones the commit into `$DEEPSEEK_HARNESS_HOME/builds/<version>-<UTC stamp>-<pid>` (default home `~/.local/share/deepseek-harness`), runs `pnpm install --frozen-lockfile` and `pnpm run build`, and smoke-tests `--version` and `web --help`;
-- it publishes atomically by replacing the `ready` symlink and records the commit in `ready/.dsh-rev`;
-- a failed build leaves the previous generation published.
-
-`scripts/restart.sh` kickstarts `gui/<uid>/deepseek-harness`; it fails when the job is not loaded. Node, pnpm, and git come from `PATH` (`DSH_NODE`, `DSH_PNPM`, `DSH_GIT` override), because Nix provides them.
-
-Run the script tests from this worktree:
-
-```sh
-node --test t/*.test.mts
-```
 
 ## Publish and credentials
 
