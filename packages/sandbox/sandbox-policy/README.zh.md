@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-使用本包可以让每次受限的 bash、文件系统和终端调用遵循同一份文件操作策略。部署方选择默认模式和回退工作区根目录，每个会话则可以独立切换模式。会话选择可跨重启保留，所有强制执行能力在一次调用中使用相同的模式和工作区。每次模型请求前，模型都会收到有效策略和工作区说明，但不会收到已挂载能力的清单。
+使用本包可以让每次受限的 bash、文件系统和终端调用遵循同一份文件操作策略。部署方选择默认模式和回退工作区根目录，每个会话则可以独立切换模式。拥有自身逐会话写入授权的宿主会把这些授权注册到策略服务，而不是写入部署配置。会话选择可跨重启保留，所有强制执行能力在一次调用中使用相同的模式和工作区。每次模型请求前，模型都会收到有效策略和工作区说明，但不会收到已挂载能力的清单。
 
 ## 目录
 
@@ -48,7 +48,7 @@ kind: "package-reference"
 | `workspaceRoot` | `process.cwd()` | 无 agent 调用或没有 cwd 的会话所用的绝对回退根目录；相对值在加载时拒绝。普通 agent 调用使用会话的不可变 cwd；cwd 为相对路径或含 NUL 字节时调用以 `SANDBOX_INVALID_ROOT` 失败 |
 | `additionalWritableRoots` | `[]` | 在 `workspace-write` 下额外允许写入的物理绝对目录；Windows 文件工具执行这些授权，Windows 子进程忽略它们，`read-only` 不授予访问权限 |
 
-对于关联的 Git worktree，调用方可通过 `additionalWritableRoots` 授予共享 Git 目录的写权限。调用方必须显式选择该目录；策略不会读取 Git 文件或授权父检出目录。这些授权是组合中所有会话共享的部署配置，而非保存的 Session 权限。授权整个 Git 目录也允许修改钩子和配置，后续主机 Git 调用可能在沙箱之外执行它们；仅对可信任务使用此授权。使用物理绝对目录路径。执行限制的主机在每次调用时拒绝不存在的路径、非目录和符号链接目录，包括两次调用之间被替换为符号链接的目录。远端授权在远端主机上验证。
+对于关联的 Git worktree，调用方可通过 `additionalWritableRoots` 授予共享 Git 目录的写权限。调用方必须显式选择该目录；策略不会读取 Git 文件或授权父检出目录。这些授权是组合中所有会话共享的部署配置，而非保存的 Session 权限；需要逐会话授权的宿主可在存活 Session 上注册目录，或注册可写根目录提供方（见[在会话上注册可写目录](#registering-a-sessions-writable-directory)与[逐会话额外目录](#per-session-extra-directories)）。授权整个 Git 目录也允许修改钩子和配置，后续主机 Git 调用可能在沙箱之外执行它们；仅对可信任务使用此授权。使用物理绝对目录路径。执行限制的主机在每次调用时拒绝不存在的路径、非目录和符号链接目录，包括两次调用之间被替换为符号链接的目录。远端授权在远端主机上验证。
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-sandbox-policy)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -62,9 +62,33 @@ kind: "package-reference"
 
 会话的模式可以在运行时通过 UI 策略控件或显式切换来更改；切换记录在会话日志中，并在该会话的下一次受限调用时生效。切换通过回放跨重启保留，每个会话保持自己的模式——两个会话绝不会看到彼此状态。切换后的会话继续以不可变的工作区 cwd 作为写入边界。
 
+<a id="per-session-extra-directories"></a>
+### 逐会话额外目录
+
+拥有逐会话写入授权的宿主（例如按 Bot 保存文件夹设置的 Bot 宿主）注册一个可写根目录提供方（`WritableRootsProvider`），而不是改写部署配置：
+
+```ts
+import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-sandbox-policy'
+import type { Session } from '@deepseek-ai/dsh-session'
+
+export function registerGrants(
+  ctx: Context,
+  grantsOf: (session: Session) => readonly string[] | undefined,
+): () => void {
+  return ctx.sandboxPolicy.registerWritableRootsProvider({
+    rootsFor: ({ session }) => session === undefined ? undefined : grantsOf(session),
+  })
+}
+```
+
+`resolve()` 把可写根目录提供方返回的根目录接在配置的根目录之后合并，按先到先得去重，然后冻结结果。可写根目录提供方在每次 resolve 时同步执行并收到请求，因此同一宿主可以给不同会话授予不同目录，而无需把它们记录到会话日志。由于授权保存在宿主自身状态中，它们会立即作用于既有会话，并在宿主不再返回时消失；返回的 disposer 用于注销提供方。
+
+可写根目录提供方是宿主可信的：已挂载的插件本就以宿主权限运行，因此该接入点让宿主状态可以授予以往只有部署配置才能指定的目录。这些授权与配置的根目录一样进入强制执行，且在 `read-only` 下不授予任何权限。
+
 ### 失败与恢复
 
-无效的配置模式会在插件加载时被拒绝，因此拼写错误会导致显式报错，而不是静默改变策略。没有 cwd 的会话与无 agent 调用回退到配置的工作区根目录；带已批准显式模式的调用只在该次调用中使用该模式。
+无效的配置模式会在插件加载时被拒绝，因此拼写错误会导致显式报错，而不是静默改变策略。没有 cwd 的会话与无 agent 调用回退到配置的工作区根目录；带已批准显式模式的调用只在该次调用中使用该模式。可写根目录提供方返回相对路径、含 NUL 的根目录或抛出异常时，resolve 失败，因此损坏的授权来源会中止调用，而不是静默收窄授权。
 
 -----
 
@@ -79,6 +103,10 @@ kind: "package-reference"
 ### 解析优先级
 
 `resolve({ session, mode })` 返回一份完整的逐调用策略：已批准的显式模式优先于会话最后一条 `sandbox/mode` 事件，后者又优先于部署默认值。会话的不可变 `cwd` 提供工作区根目录；否则使用配置的回退值。执行环境中的绝对路径写法保持不变。执行限制的提供方在自己的文件系统上规范化根目录，因此远端 `symlink/..` 路径绝不会在 Harness 主机上解析。
+
+### 写入根目录解析
+
+一次调用的额外根目录是配置的根目录后接每个已注册可写根目录提供方按注册顺序给出的贡献，按先到先得去重并冻结。可写根目录提供方在每次 resolve 时都会被调用（包括无 agent 调用），并收到调用方传入的同一请求。授权保存在宿主状态中，因此没有会话事件、持久化目录条目或格式版本记录它们。
 
 ### 逐会话存储
 
@@ -158,7 +186,7 @@ Current DSH file policy: danger-full-access. The DSH file sandbox does not restr
 
 这些限制界定了本包提供的策略范围。它们是当前的包级约束，并非通用沙箱对比，也不是待办事项清单。
 
-- **运行时授权不持久化**——配置目录由各会话共享；effect 注册属于一个存活 Session，恢复或派生后必须重新注册。后端支持情况见 [sandbox-local](../sandbox-local/README.zh.md)。
+- **运行时授权不持久化**——配置目录由各会话共享；effect 注册属于一个存活 Session，恢复或派生后必须重新注册；提供方贡献属于实时宿主状态，在不具备该提供方的宿主上恢复会话会丢失它们。后端支持情况见 [sandbox-local](../sandbox-local/README.zh.md)。
 - **仅限文件操作模式**——`SandboxMode` 管控文件操作；网络和进程策略不在其词汇中，因此这里没有限制它们的旋钮。
 - **有意概述临时区域**——强制执行后端会授予不同的平台临时区域，这些区域在策略解析后才会选定，因此无法在当前上下文中如实枚举。
 

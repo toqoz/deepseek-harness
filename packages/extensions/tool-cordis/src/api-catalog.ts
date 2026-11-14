@@ -2846,10 +2846,16 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'registerWritableRootsProvider(provider: WritableRootsProvider): () => void',
+        description: 'Register a per-session source of extra writable directories. Providers are host-trusted, because a plugin already runs with host authority; their grants reach enforcement exactly like the configured roots and grant nothing outside `workspace-write`.',
+        parameters: [{ name: 'provider', description: 'the source {@link resolve} consults on every call.' }],
+        returns: 'a disposer that removes the provider; calling it again has no effect.',
+      },
+      {
         signature: 'resolve(request: SandboxPolicyRequest = {}): SandboxExecutionPolicy',
-        description: 'Resolve the complete policy for one capability call. An approved explicit mode outranks the session\'s last `sandbox/mode` event, which outranks the deployment default. A session cwd is its workspace-write boundary; the configured root is the fallback for agentless calls and sessions without a cwd. Configured extra roots and this Session\'s active registrations are snapshotted together; existing operations and processes keep their policy.',
+        description: 'Resolve the complete policy for one capability call. An approved explicit mode outranks the session\'s last `sandbox/mode` event, which outranks the deployment default. A session cwd is its workspace-write boundary; the configured root is the fallback for agentless calls and sessions without a cwd. Configured extra roots, this Session\'s active registrations, and every registered provider\'s contribution are snapshotted together; existing operations and processes keep their policy.',
         parameters: [{ name: 'request', description: 'optional session and approved mode override.' }],
-        returns: 'the fully resolved per-call mode and absolute workspace root.',
+        returns: 'the fully resolved per-call mode, absolute workspace root, and frozen extra roots.',
         throws: ['`SandboxInvalidRootError` (`SANDBOX_INVALID_ROOT`) when the session\'s recorded cwd is relative or contains a NUL byte.'],
       },
       {
@@ -11090,6 +11096,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorktreeCleanup',
     declaration: 'export interface WorktreeCleanup {\n    readonly revision: number;\n    readonly status: \'scheduled\' | \'retained\' | \'removed\' | \'failed\';\n}',
+  },
+  {
+    name: 'WritableRootsProvider',
+    declaration: 'export interface WritableRootsProvider {\n    rootsFor(request: SandboxPolicyRequest): readonly string[] | undefined;\n}',
   },
 ]
 
