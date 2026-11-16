@@ -25,7 +25,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import { pushSubcommandOf, commandDetailOf } from './push-command.ts'
+import { pushTargetOf, commandDetailOf, type PushTarget } from './push-command.ts'
 import { loadGuardState, saveGuardState, sessionEnabled, type MutableGuardState } from './state.ts'
 
 export type { GuardState } from './state.ts'
@@ -42,12 +42,29 @@ export interface Config {
   readonly stateFile?: string
   /** Whether a new session starts with the guard enabled. Defaults to true. */
   readonly defaultEnabled?: boolean
+  /**
+   * Branch names whose pushes wait for confirmation. Empty guards every push.
+   * Use `guardedBranchesPrefix` for a family such as `release/`.
+   */
+  readonly guardedBranches?: string[]
+  /** Branch-name prefixes whose pushes wait for confirmation; `release/` covers `release/2026-05`. */
+  readonly guardedBranchesPrefix?: string[]
 }
 
 export const Config: z<Config> = z.object({
   stateFile: z.string(),
   defaultEnabled: z.boolean().default(true),
+  guardedBranches: z.array(z.string()).default([]),
+  guardedBranchesPrefix: z.array(z.string()).default([]),
 })
+
+/** Branches whose pushes wait for confirmation, split by how a name matches. */
+interface GuardedBranches {
+  /** Branch names matched exactly. */
+  readonly exact: readonly string[]
+  /** Branch-name prefixes: every branch that starts with one is guarded. */
+  readonly prefix: readonly string[]
+}
 
 /** Same-origin endpoint the browser controls read and write. */
 const STATE_ROUTE = '/push-guard/state'
@@ -61,10 +78,23 @@ const APPROVE = 'Allow'
 /** Allow label that keeps the push blocked. */
 const REJECT = 'Reject'
 
-/** Model-facing policy statement contributed while the guard is enabled. */
-const PROMPT_TEXT = 'Git push guard is enabled in this session: git push commands do not run until the user answers '
-  + 'the confirmation question the Harness shows right before the command runs. If the user rejects it, do not retry '
-  + 'unless the user asks you to push. The user can turn the guard off for this session from the guard chip in the composer.'
+/**
+ * Model-facing policy statement contributed while the guard is enabled.
+ * @param guardedBranches - configured branch words; empty guards every push.
+ * @returns the policy text for this deployment.
+ */
+function promptTextOf(guardedBranches: GuardedBranches): string {
+  const names = [
+    ...guardedBranches.exact.map(word => `\`${word}\``),
+    ...guardedBranches.prefix.map(word => `\`${word}*\``),
+  ]
+  const scope = names.length === 0
+    ? 'git push commands'
+    : `git push commands to ${names.join(', ')}, and pushes that name no branch`
+  return `Git push guard is enabled in this session: ${scope} do not run until the user answers `
+    + 'the confirmation question the Harness shows right before the command runs. If the user rejects it, do not retry '
+    + 'unless the user asks you to push. The user can turn the guard off for this session from the guard chip in the composer.'
+}
 
 /** Model-facing denial when the user rejects the push. */
 const REJECTED_REASON = 'Git push guard: the user rejected this push, so nothing ran. Do not retry unless the user asks you to push.'
@@ -173,12 +203,52 @@ function stateRoute(state: MutableGuardState, persist: () => void) {
   }
 }
 
+/** Whether one pending push stays guarded, and which configured words it reaches. */
+interface GuardHit {
+  /** Configured words the push reaches; empty when no branch filter is configured. */
+  readonly matched: readonly string[]
+  /** Whether the command names no single destination, so its branch is unknown here. */
+  readonly unknown: boolean
+}
+
+/**
+ * Decide whether one push target stays guarded.
+ * @param target - the branches the command pushes to.
+ * @param guardedBranches - configured words; empty guards every push.
+ * @returns the hit, or undefined when a configured filter covers no branch of this push.
+ */
+function guardHit(target: PushTarget, guardedBranches: GuardedBranches): GuardHit | undefined {
+  const words = [...guardedBranches.exact, ...guardedBranches.prefix.map(word => `${word}*`)]
+  if (words.length === 0) return { matched: [], unknown: false }
+  // `--all` and a push without a refspec can reach a guarded branch without
+  // naming it, so they stay guarded rather than passing unexamined.
+  if (target.all || target.implicit) return { matched: [], unknown: true }
+  const matched = target.branches.flatMap((branch) => {
+    if (guardedBranches.exact.includes(branch)) return [branch]
+    const prefix = guardedBranches.prefix.find(word => branch.startsWith(word))
+    return prefix === undefined ? [] : [`${prefix}*`]
+  })
+  return matched.length === 0 ? undefined : { matched: [...new Set(matched)], unknown: false }
+}
+
+/**
+ * Describe the guarded branches in the confirmation question.
+ * @param hit - what the pending push reaches.
+ * @returns one line naming the branches, or the reason the branch is unknown.
+ */
+function detailOfHit(hit: GuardHit): string {
+  if (hit.matched.length > 0) return `Guarded branches: ${hit.matched.join(', ')}`
+  if (hit.unknown) return 'Guarded branches: the command names none, so it pushes the current branch'
+  return 'Guarded branches: every push'
+}
+
 /**
  * Ask the user whether one pending push may run.
  * @param ctx - plugin context carrying the human answerer.
  * @param agent - the agent that owns the pending call.
  * @param execution - the pending tool call.
  * @param command - its shell command string.
+ * @param hit - the guarded branches this push reaches.
  * @returns the pre-dispatch decision.
  */
 async function confirmPush(
@@ -186,6 +256,7 @@ async function confirmPush(
   agent: NonNullable<ToolExecution['agent']>,
   execution: ToolExecution,
   command: string,
+  hit: GuardHit,
 ): Promise<PreToolDecision> {
   try {
     const answer = await ctx.userQuestions.ask({
@@ -195,7 +266,7 @@ async function confirmPush(
         id: 'git-push-guard',
         header: 'Git push guard',
         question: 'Allow this Git push?',
-        detail: `The agent wants to run:\n\n${commandDetailOf(command)}`,
+        detail: `The agent wants to run:\n\n${commandDetailOf(command)}\n\n${detailOfHit(hit)}`,
         options: [
           { label: APPROVE, description: 'Run this push command.' },
           { label: REJECT, description: 'Keep the push blocked.' },
@@ -247,13 +318,15 @@ function commandOf(execution: ToolExecution): string | undefined {
 }
 
 /**
- * Report the push-creating command a pending tool call would run.
+ * Report the push a pending tool call would run.
  * @param execution - pending tool call.
- * @returns the command string, or undefined when the call pushes nothing.
+ * @returns the command string and its target, or undefined when the call pushes nothing.
  */
-function pushCommand(execution: ToolExecution): string | undefined {
+function pushOf(execution: ToolExecution): { command: string; target: PushTarget } | undefined {
   const command = commandOf(execution)
-  return command !== undefined && pushSubcommandOf(command) !== undefined ? command : undefined
+  if (command === undefined) return undefined
+  const target = pushTargetOf(command)
+  return target === undefined ? undefined : { command, target }
 }
 
 /**
@@ -265,6 +338,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const file = config.stateFile ?? dshHomePath('push-guard', 'state.json')
   /* v8 ignore next -- Config normalization supplies defaultEnabled before apply; the fallback serves direct apply() calls. */
   const state = loadGuardState(file, config.defaultEnabled ?? true)
+  const guardedBranches: GuardedBranches = { exact: config.guardedBranches ?? [], prefix: config.guardedBranchesPrefix ?? [] }
   const persist = (): void => { saveGuardState(file, state) }
 
   // The route admits no anonymous request: the Connection service's
@@ -286,14 +360,16 @@ export function apply(ctx: Context, config: Config = {}): void {
   })
 
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
-    const command = pushCommand(exec)
-    if (command === undefined) return next()
+    const push = pushOf(exec)
+    if (push === undefined) return next()
+    const hit = guardHit(push.target, guardedBranches)
+    if (hit === undefined) return next()
     const agent = exec.agent
     // A push intent without an owning session cannot be approved; fail closed.
     if (agent === undefined) return { kind: 'deny', reason: NO_AGENT_REASON }
     const sessionId = agent.session.id
     if (!sessionEnabled(state, sessionId, persist)) return next()
-    const decision = await confirmPush(ctx, agent, exec, command)
+    const decision = await confirmPush(ctx, agent, exec, push.command, hit)
     if (decision.kind === 'allow') return next()
     return decision
   })
@@ -304,7 +380,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     text: (context) => {
       const agent = context.agent
       if (agent === undefined) return ''
-      return sessionEnabled(state, agent.session.id, persist) ? PROMPT_TEXT : ''
+      return sessionEnabled(state, agent.session.id, persist) ? promptTextOf(guardedBranches) : ''
     },
   })
 }

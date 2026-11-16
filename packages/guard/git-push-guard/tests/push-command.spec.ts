@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { commandDetailOf, pushSubcommandOf } from '../src/push-command.ts'
+import { commandDetailOf, pushSubcommandOf, pushTargetOf } from '../src/push-command.ts'
 
 describe('pushSubcommandOf', () => {
   it('recognizes a git push and its arguments', () => {
@@ -104,5 +104,39 @@ describe('commandDetailOf', () => {
   it('trims the command and caps its length', () => {
     expect(commandDetailOf('  git push  ')).toBe('git push')
     expect(commandDetailOf('x'.repeat(600))).toHaveLength(500)
+  })
+})
+
+describe('pushTargetOf', () => {
+  it('reads the destination branch of each refspec form', () => {
+    expect(pushTargetOf('git push origin main')?.branches).toEqual(['main'])
+    expect(pushTargetOf('git push origin main:main')?.branches).toEqual(['main'])
+    expect(pushTargetOf('git push origin HEAD:refs/heads/main')?.branches).toEqual(['main'])
+    expect(pushTargetOf('git push -u origin feat/x')?.branches).toEqual(['feat/x'])
+    expect(pushTargetOf('git push --force-with-lease origin +feat/x:feat/x')?.branches).toEqual(['feat/x'])
+    expect(pushTargetOf('git push origin :main')?.branches).toEqual(['main'])
+    expect(pushTargetOf('git push --delete origin main')?.branches).toEqual(['main'])
+  })
+
+  it('separates a push that names no destination', () => {
+    expect(pushTargetOf('git push')).toMatchObject({ branches: [], all: false, implicit: true })
+    expect(pushTargetOf('git push origin')).toMatchObject({ branches: [], implicit: true })
+    expect(pushTargetOf('git push -u origin HEAD')).toMatchObject({ branches: [], implicit: true })
+  })
+
+  it('marks a push that publishes every branch', () => {
+    expect(pushTargetOf('git push --all origin')).toMatchObject({ all: true, implicit: false })
+    expect(pushTargetOf('git push --mirror origin')).toMatchObject({ all: true })
+    expect(pushTargetOf('git push --tags origin')).toMatchObject({ all: true })
+  })
+
+  it('keeps a tag refspec out of the branch destinations', () => {
+    expect(pushTargetOf('git push origin v1.0.0')?.branches).toEqual(['v1.0.0'])
+    expect(pushTargetOf('git push origin refs/tags/v1.0.0')?.branches).toEqual([])
+  })
+
+  it('does not report a target for a command that pushes nothing', () => {
+    expect(pushTargetOf('git status')).toBeUndefined()
+    expect(pushTargetOf('git log --grep push')).toBeUndefined()
   })
 })
