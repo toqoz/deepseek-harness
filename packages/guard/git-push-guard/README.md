@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This package keeps an agent from publishing to a remote on its own. While the guard is enabled for a Session, a `git push` run through the `bash`, `pwsh`, or `terminal_send` tool waits until the user confirms it in the Web UI. The question names the exact command: **Allow** runs that one command, and **Reject** blocks it with a model-visible reason. One default covers new Sessions and one switch covers a single Session. Commits stay unguarded, and the package installs no repository hook.
+This package keeps an agent from publishing to a remote on its own. While the guard is enabled for a Session, a `git push` run through the `bash`, `pwsh`, or `terminal_send` tool waits until the user confirms it in the Web UI. `guardedBranches` and `guardedBranchesPrefix` narrow that to named branches: with `guardedBranches: ["main"]`, a push that reaches `main` asks and every other branch runs, while both lists empty guards every push. A push whose branch the command does not name — a bare `git push`, or `--all` and friends — asks too, because it can reach a guarded branch without naming it. The question names the exact command: **Allow** runs that one command, and **Reject** blocks it with a model-visible reason. One default covers new Sessions and one switch covers a single Session. Commits stay unguarded, and the package installs no repository hook.
 
 ## Table of Contents
 
@@ -37,6 +37,8 @@ Choose it while an agent works in a repository whose remote history must stay un
 |---|---|---|
 | `stateFile` | `$DSH_HOME/push-guard/state.json` | Absolute path of the persisted setting file |
 | `defaultEnabled` | `true` | Whether a Session starts guarded when it has no stored choice |
+| `guardedBranches` | `[]` | Branch names whose pushes wait for confirmation |
+| `guardedBranchesPrefix` | `[]` | Branch-name prefixes whose pushes wait for confirmation (`release/` covers `release/2026-05`) |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-git-push-guard) documents every accepted value.
 
@@ -99,12 +101,14 @@ While the addressed Session's guard is on, each assembled request contains the s
 ##### Session policy section
 
 ```markdown
-Git push guard is enabled in this session: git push commands do not run until the user answers the confirmation question the Harness shows right before the command runs. If the user rejects it, do not retry unless the user asks you to push. The user can turn the guard off for this session from the guard chip in the composer.
+Git push guard is enabled in this session: git push commands to `main`, `release/*`, and pushes that name no branch do not run until the user answers the confirmation question the Harness shows right before the command runs. If the user rejects it, do not retry unless the user asks you to push. The user can turn the guard off for this session from the guard chip in the composer.
 ```
+
+With both branch lists empty, the same paragraph reads `git push commands do not run` instead of naming branches.
 
 #### Token effect
 
-A fixed paragraph per request while the addressed Session is guarded; no tokens for a Session with the guard off.
+A fixed paragraph per request while the addressed Session is guarded; no tokens for a Session with the guard off. `guardedBranches` and `guardedBranchesPrefix` change that paragraph's branch list once at load, so it stays a fixed prefix per deployment.
 
 #### KV Cache effect
 

@@ -1795,6 +1795,13 @@ export interface Config {
   readonly stateFile?: string
   /** Whether a new session starts with the guard enabled. Defaults to true. */
   readonly defaultEnabled?: boolean
+  /**
+   * Branch names whose pushes wait for confirmation. Empty guards every push.
+   * Use `guardedBranchesPrefix` for a family such as `release/`.
+   */
+  readonly guardedBranches?: string[]
+  /** Branch-name prefixes whose pushes wait for confirmation; `release/` covers `release/2026-05`. */
+  readonly guardedBranchesPrefix?: string[]
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-git-push-guard -->
