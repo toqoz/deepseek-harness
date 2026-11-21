@@ -24,6 +24,8 @@ interface HarnessOptions {
   readonly answer?: 'Allow' | 'Reject' | 'child' | 'unavailable' | 'delegated' | 'object-error'
   readonly abortSignal?: AbortSignal
   readonly stored?: GuardState
+  readonly guardedBranches?: string[]
+  readonly guardedBranchesPrefix?: string[]
 }
 
 interface FakeResponse {
@@ -48,6 +50,11 @@ interface Harness {
   readonly sections: PromptSection[]
   readonly asks: QuestionRequest[]
   readonly stateFile: string
+  readonly config: {
+    stateFile: string
+    guardedBranches?: string[]
+    guardedBranchesPrefix?: string[]
+  }
 }
 
 interface Execution {
@@ -100,11 +107,16 @@ function harness(options: HarnessOptions = {}): Harness {
       return { answers: [{ id: 'git-push-guard', selected: [selected] }] }
     },
   })
-  return { ctx, routes, sections, asks, stateFile }
+  const config: Harness['config'] = {
+    stateFile,
+    ...options.guardedBranches === undefined ? {} : { guardedBranches: options.guardedBranches },
+    ...options.guardedBranchesPrefix === undefined ? {} : { guardedBranchesPrefix: options.guardedBranchesPrefix },
+  }
+  return { ctx, routes, sections, asks, stateFile, config }
 }
 
 async function mount(harnessed: Harness): Promise<void> {
-  await harnessed.ctx.plugin(GitPushGuard, { stateFile: harnessed.stateFile })
+  await harnessed.ctx.plugin(GitPushGuard, harnessed.config)
 }
 
 function fakeRequest(method: string, url: string, body?: unknown, headers: Record<string, string> = {}): FakeRequest {
@@ -491,5 +503,56 @@ describe('fiber teardown', () => {
     expect(await sectionNames()).not.toContain('git-push-guard:policy')
     expect(await preExecute(ctx, pushExecution('git push origin main'))).toEqual({ kind: 'allow' })
     expect(asks).toHaveLength(0)
+  })
+})
+
+describe('guarded branches', () => {
+  it('asks only for a push that reaches a configured branch', async () => {
+    const harnessed = harness({ guardedBranches: ['main', 'develop'] })
+    await mount(harnessed)
+
+    const guarded = await preExecute(harnessed.ctx, pushExecution('git push origin main'))
+    expect(guarded.kind).toBe('allow')
+    expect(harnessed.asks).toHaveLength(1)
+
+    const unguarded = await preExecute(harnessed.ctx, pushExecution('git push origin feat/x'))
+    expect(unguarded).toEqual({ kind: 'allow' })
+    expect(harnessed.asks).toHaveLength(1)
+  })
+
+  it('guards a branch whose name starts with a configured prefix', async () => {
+    const harnessed = harness({ guardedBranchesPrefix: ['release/'] })
+    await mount(harnessed)
+
+    await preExecute(harnessed.ctx, pushExecution('git push origin release/2026-05'))
+    expect(harnessed.asks).toHaveLength(1)
+
+    await preExecute(harnessed.ctx, pushExecution('git push origin releases'))
+    expect(harnessed.asks).toHaveLength(1)
+  })
+
+  it('guards a push whose branch it cannot name, and one that publishes every branch', async () => {
+    const harnessed = harness({ guardedBranches: ['main'] })
+    await mount(harnessed)
+
+    await preExecute(harnessed.ctx, pushExecution('git push'))
+    await preExecute(harnessed.ctx, pushExecution('git push --all origin'))
+    expect(harnessed.asks).toHaveLength(2)
+  })
+
+  it('keeps guarding every push when no branch is configured', async () => {
+    const harnessed = harness()
+    await mount(harnessed)
+
+    await preExecute(harnessed.ctx, pushExecution('git push origin feat/x'))
+    expect(harnessed.asks).toHaveLength(1)
+  })
+
+  it('names the guarded branch in the confirmation question', async () => {
+    const harnessed = harness({ guardedBranches: ['main'] })
+    await mount(harnessed)
+
+    await preExecute(harnessed.ctx, pushExecution('git push origin HEAD:main'))
+    expect(harnessed.asks[0]?.questions[0]?.detail).toContain('Guarded branches: main')
   })
 })

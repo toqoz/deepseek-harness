@@ -59,6 +59,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
       auth.authorizeIndex(request, response, webCtx.webServer.protocol === 'https:')
     })
+    // An installed application has no address bar for the launch URL, so a
+    // denied index navigation has to offer the page that accepts one. Admission
+    // still decides whether the request is allowed at all; this only replaces
+    // the webserver's short refusal for the document itself.
+    webCtx.on('webserver/deny', (request, response, admission) => {
+      if (admission.kind !== 'deny' || admission.status !== 401) return
+      if (request.method !== 'GET' && request.method !== 'HEAD') return
+      if (request.url.pathname !== '/' && request.url.pathname !== '/index.html') return
+      if (request.socket?.destroyed || response.destroyed || request.signal?.aborted) return
+      auth.serveUnauthorized(request, response)
+      return true
+    })
     webCtx.effect(() => webCtx.webServer.register({
       kind: 'exact', path: CONNECT_PATH, auth: 'anonymous',
       handler(request, response) {

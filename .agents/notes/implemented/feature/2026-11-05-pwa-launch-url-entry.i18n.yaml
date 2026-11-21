@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-05-pwa-launch-url-entry.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-11-05-pwa-launch-url-entry.md
+/agent-note-offer-the-launch-url-when-a-browser-has-no-valid-session:
+  en: 7fee72cf25e23e98
+  zh: 72f8643ea2421764
+/agent-note-offer-the-launch-url-when-a-browser-has-no-valid-session/problem:
+  en: e57c74a20d2cfc23
+  zh: 6b4e0f03f2dc9cda
+/agent-note-offer-the-launch-url-when-a-browser-has-no-valid-session/decision:
+  en: 2699f3791d9a8eaf
+  zh: 3c18d1200e39800c
+/agent-note-offer-the-launch-url-when-a-browser-has-no-valid-session/alternatives-considered:
+  en: 65aa74b642155a31
+  zh: f19bfd786addc602
+/agent-note-offer-the-launch-url-when-a-browser-has-no-valid-session/consequences:
+  en: 7e4e9dd41155b014
+  zh: 783765867a4c2c28

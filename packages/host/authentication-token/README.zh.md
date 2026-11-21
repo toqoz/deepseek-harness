@@ -35,6 +35,8 @@ kind: "package-reference"
 
 携带启动 Token query 的根路径请求由原 Token 交换处理：成功的 `GET /` 返回303、写入 Cookie，并重定向到 `./`；无效凭据返回401。其他路径的请求交给其路由 owner。WebApp 就绪后收集入口时，本插件向传入的基地址追加进程 Token，同时保留 authority、路径与其他 query 字段。贡献的入口允许自动打开。Token 不读取 WebApp 服务，也不拥有打印、就绪判断或原生浏览器打开器。
 
+已安装的应用没有地址栏，因此没有 Cookie 的浏览器原本只会收到一个拒绝。被拒绝的索引导航（`/` 或 `/index.html`）改由 `webserver/deny` 返回一个独立页面：一份固定的文档，不加载任何外部资源，并带有一个接受 `dsh web` 打印的 URL 的输入框。页面会自行重载一次，使浏览器持有但未随该导航发送的 Cookie 仍能完成认证。
+
 浏览器 v1 Cookie 认证为本插件拥有的共享 Peer。`/connect` 声明匿名路由准入：Connection 检查来源，handler 随后验证启动 Token、创建 API Peer，并在 v2 Cookie 中签入其 ID。有效 v2 Cookie 通过同一 Provider 认证页面与 API 请求。Peer 的 principal 与 RemoteAccess 决定权限，不区分页面/API purpose 等级。Token 限制每个 API Peer 只有一条 `/api/remote.mux` Socket；重复关联返回409，不撤销首条连接。该 Socket 关闭时先同步撤销凭据，再释放 Peer；后续使用该 Cookie 的请求被拒绝。其他升级路由（包括 Inspector CDP）不认领该 Peer，也不在关闭时撤销它。
 
 签名密钥仍使用 Credentials 的 `client-connection/browser-session` grant 记录。Cookie 名称、签名 audience、有效期验证及监听器决定的 `Secure` 属性遵循既有协议。重载保留根应用的启动 Token 与尚有效 Cookie，同时创建新的插件共享 Peer。Token 激活失败允许应用在缺少此验证器时继续运行，但不允许未认证访问受保护路由。Desktop 可以同时挂载本 Provider 与私有凭据 Provider。

@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Use this package to apply one file-effect policy to every confined bash, filesystem, and terminal call. Deployments choose a default mode and fallback workspace root, while each session can switch modes independently. Session choices survive restart, and all enforcing capabilities use the same mode and workspace for a call. Before each model request, the model receives the effective policy and workspace without an inventory of mounted capabilities.
+Use this package to apply one file-effect policy to every confined bash, filesystem, and terminal call. Deployments choose a default mode and fallback workspace root, while each session can switch modes independently. A host that owns its own per-session write grants registers them with the policy service instead of the deployment configuration. Session choices survive restart, and all enforcing capabilities use the same mode and workspace for a call. Before each model request, the model receives the effective policy and workspace without an inventory of mounted capabilities.
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ Load the package with a default mode; the fail-safe default is `read-only`, and 
 | `workspaceRoot` | `process.cwd()` | Absolute fallback root for agentless calls and, without the working-directory service, sessions without a header directory; relative values fail at load. Normal agent calls use the session's working directory; a relative root or one containing a NUL byte fails the call with `SANDBOX_INVALID_ROOT` |
 | `additionalWritableRoots` | `[]` | Physical absolute directories also writable under `workspace-write`; Windows file tools honor them, Windows subprocesses ignore them, and `read-only` grants no access |
 
-A session's workspace root is the directory it works in, read from the [working-directory service](../../session/working-directory/README.md): every Host move of the Session's directory, such as entering or leaving a worktree, moves the boundary with it. For a linked Git worktree, the repository's Git directory lies outside that root, so Git commands that write it are denied under `workspace-write` until a grant covers it: the deployment can grant it to every session with `additionalWritableRoots`, and a Host plugin can grant it to one live Session with `registerWritableRoot`. The caller selects that directory explicitly; the policy does not inspect Git files or grant a parent checkout. These grants are deployment configuration shared by the composition's sessions, rather than saved Session permissions. Granting the entire Git directory also permits changes to hooks and configuration that a later host Git invocation can execute outside the sandbox; use that grant only for trusted tasks. Use physical absolute directory paths. The enforcing host rejects missing paths, non-directories, and symlinked directories on each call, including a directory replaced by a symlink between calls. Remote grants are validated on the remote host.
+A session's workspace root is the directory it works in, read from the [working-directory service](../../session/working-directory/README.md): every Host move of the Session's directory, such as entering or leaving a worktree, moves the boundary with it. For a linked Git worktree, the repository's Git directory lies outside that root, so Git commands that write it are denied under `workspace-write` until a grant covers it: the deployment can grant it to every session with `additionalWritableRoots`, and a Host plugin can grant it to one live Session with `registerWritableRoot` or a writable-roots provider (see [Registering a session's writable directory](#registering-a-sessions-writable-directory) and [Per-session extra directories](#per-session-extra-directories)). The caller selects that directory explicitly; the policy does not inspect Git files or grant a parent checkout. These grants are deployment configuration shared by the composition's sessions, rather than saved Session permissions. Granting the entire Git directory also permits changes to hooks and configuration that a later host Git invocation can execute outside the sandbox; use that grant only for trusted tasks. Use physical absolute directory paths. The enforcing host rejects missing paths, non-directories, and symlinked directories on each call, including a directory replaced by a symlink between calls. Remote grants are validated on the remote host.
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-sandbox-policy) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -62,9 +62,33 @@ Registration and disposal affect subsequent policy resolutions and the next mode
 
 A session's mode can be switched at runtime through a UI policy control or an explicit switch; the switch is recorded in the session log and takes effect on the session's next confined call. The switch survives restart through replay, and each session keeps its own mode — two sessions never see each other's state. A switched session keeps its workspace root as the writable boundary.
 
+<a id="per-session-extra-directories"></a>
+### Per-session extra directories
+
+A host that owns per-session write grants, such as a bot host keeping its own per-bot folder settings, registers a writable-roots provider (`WritableRootsProvider`) rather than rewriting deployment configuration:
+
+```ts
+import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-sandbox-policy'
+import type { Session } from '@deepseek-ai/dsh-session'
+
+export function registerGrants(
+  ctx: Context,
+  grantsOf: (session: Session) => readonly string[] | undefined,
+): () => void {
+  return ctx.sandboxPolicy.registerWritableRootsProvider({
+    rootsFor: ({ session }) => session === undefined ? undefined : grantsOf(session),
+  })
+}
+```
+
+`resolve()` merges the writable-roots provider's roots after the configured ones and deduplicates first-wins, then freezes the result. Writable-roots providers run synchronously on every resolve and receive the request, so one host can grant different directories to different sessions without recording them in the Session log. Because the grants live in the host's own state, they apply immediately to existing sessions and disappear when the host stops returning them; the returned disposer unregisters the provider.
+
+Writable-roots providers are host-trusted: a mounted plugin already runs with host authority, so this seam lets host state grant directories that only deployment configuration could name before. The grants reach enforcement exactly like configured roots, and grant nothing under `read-only`.
+
 ### Failures and recovery
 
-An invalid configured mode is rejected when the plugin loads, so a typo fails loud instead of silently changing policy. A session without a cwd, and agentless calls, fall back to the configured workspace root; a call with an approved explicit mode uses that mode for exactly that call.
+An invalid configured mode is rejected when the plugin loads, so a typo fails loud instead of silently changing policy. A session without a cwd, and agentless calls, fall back to the configured workspace root; a call with an approved explicit mode uses that mode for exactly that call. A writable-roots provider that returns a relative or NUL-containing root, or that throws, fails the resolve, so a broken grant source stops the call instead of silently narrowing it.
 
 -----
 
@@ -79,6 +103,10 @@ This section explains policy resolution, the per-session store, and the model-vi
 ### Resolution precedence
 
 `resolve({ session, mode })` returns one complete per-call policy: an approved explicit mode outranks the session's last `sandbox/mode` event, which outranks the deployment default. The session's directory from the working-directory service supplies the workspace root; without that service its header directory and then the configured root do. Absolute execution-world spelling is preserved. Enforcing providers canonicalize the root on their own filesystem, so remote `symlink/..` paths are never resolved on the Harness host.
+
+### Writable-root resolution
+
+The extra roots of one call are the configured roots followed by every registered writable-roots provider's contribution in registration order, deduplicated first-wins and frozen. These providers are consulted on every resolve, including agentless calls, and receive the same request the caller passed. The grants live in host state, so no Session event, persistence catalog entry, or format version records them.
 
 ### The per-session store
 
@@ -158,7 +186,7 @@ The stable system prompt remains byte-identical across mode changes. A changed f
 
 These limits define the policy surface this package provides. They are current package constraints, not a general sandbox comparison or a task backlog.
 
-- **Runtime grants are not persisted** — configured directories are shared across sessions; effect registrations belong to one live Session and must be renewed after restore or fork. Backend support is defined by [sandbox-local](../sandbox-local/README.md).
+- **Runtime grants are not persisted** — configured directories are shared across sessions; effect registrations belong to one live Session and must be renewed after restore or fork; provider contributions are live host state, so resuming on a host without that provider loses them. Backend support is defined by [sandbox-local](../sandbox-local/README.md).
 - **File-effect modes only** — `SandboxMode` governs file effects; network and process policy are outside its vocabulary, so no knob here restricts them.
 - **Temporary areas are deliberately summarized** — enforcing backends grant different platform temporary areas, which are selected after policy resolution and therefore cannot be enumerated truthfully in the current context.
 

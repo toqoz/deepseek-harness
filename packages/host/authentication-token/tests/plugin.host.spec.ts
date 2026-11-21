@@ -5,7 +5,7 @@ import { ConnectionAuthentication, type AuthenticationProvider, type HostConnect
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { once } from 'node:events'
 import { PassThrough } from 'node:stream'
-import type { WebEntryUrl, WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
+import type { WebAdmission, WebAuthRequest, WebEntryUrl, WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
 import * as Token from '../src/index.ts'
 import { RecordCredentials } from './browser-credentials.ts'
 import { BrowserAuth } from '../src/browser-auth.ts'
@@ -113,6 +113,40 @@ it('exchanges a root token, passes other routes on, and keeps browser authentica
   const dropped = response()
   await ctx.waterfall('webserver/request', disconnected, dropped.res, next)
   expect(dropped.state.status).toBeUndefined()
+})
+
+/** A request as the admission event presents it: a parsed URL and a transport. */
+function admissionRequest(pathname: string, method = 'GET'): WebAuthRequest {
+  return {
+    headers: { host: 'localhost:3080' },
+    method,
+    url: new URL(`http://localhost:3080${pathname}`),
+    transport: 'http',
+    socket: { destroyed: false },
+  }
+}
+
+/** Run the bail event the webserver emits when admission denied a request. */
+function deny(ctx: Context, request: WebAuthRequest, response: ServerResponse, admission: WebAdmission): boolean | undefined {
+  const bail = Reflect.get(ctx, 'bail') as (name: string, ...args: unknown[]) => boolean | undefined
+  return bail.call(ctx, 'webserver/deny', request, response, admission)
+}
+
+it('renders the launch-URL page for a denied index navigation', async () => {
+  const { ctx } = await mounted()
+
+  const page = response()
+  expect(deny(ctx, admissionRequest('/'), page.res, { kind: 'deny', status: 401 })).toBe(true)
+  expect(page.state.status).toBe(401)
+  expect(page.state.headers?.['content-type']).toBe('text/html; charset=utf-8')
+  expect(page.state.body).toContain('Authentication required')
+
+  const elsewhere = response()
+  expect(deny(ctx, admissionRequest('/api/remote.mux'), elsewhere.res, { kind: 'deny', status: 401 })).toBeUndefined()
+  expect(elsewhere.state.status).toBeUndefined()
+
+  const unavailable = response()
+  expect(deny(ctx, admissionRequest('/'), unavailable.res, { kind: 'deny', status: 503 })).toBeUndefined()
 })
 
 it('delegates synthetic Worker requests without a native socket', async () => {

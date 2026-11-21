@@ -1,5 +1,7 @@
 /** Feature client styles color through ui-theme aliases, never static palette steps or literal colors. */
 import { readFileSync } from 'node:fs'
+import { relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import { packageFiles, parseRules } from './stylesheet-scan.ts'
 
@@ -60,11 +62,19 @@ const roots = scanned.filter(file => file.endsWith('/package.json')).flatMap((fi
   return manifest.dsh?.client === undefined ? [] : [file.slice(0, -'package.json'.length)]
 })
 
+/** Repo-relative, `/`-separated spelling of a scanned path. */
+function repoRelative(file: string): string {
+  return relative(fileURLToPath(new URL('../../../../', import.meta.url)), file).replaceAll('\\', '/')
+}
+
 /** Whether a file is feature source covered by the checks: Client package `src/`, not ui-theme sheets or exemptions. */
 function featureSource(file: string): boolean {
-  return (file.includes('/packages/client/') || roots.some(root => file.startsWith(root)))
-    && file.includes('/src/')
-    && !file.includes('/packages/client/ui-theme/src/styles/')
+  // Judge the repo-relative path: a checkout rooted under a directory named
+  // `src` would otherwise make every scanned file look like package source.
+  const path = repoRelative(file)
+  return (path.startsWith('packages/client/') || roots.some(root => file.startsWith(root)))
+    && path.includes('/src/')
+    && !path.startsWith('packages/client/ui-theme/src/styles/')
     && !exempt(file)
 }
 
