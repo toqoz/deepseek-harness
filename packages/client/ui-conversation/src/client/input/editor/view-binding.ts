@@ -141,6 +141,7 @@ export function installDraftKeymap(
       return keyboard.recallHistory(direction)
     },
     canSubmit: () => !gate.current.locked && !gate.current.machineBusy,
+    enterInsertsLineBreak: () => isMobileDevice(),
     submit: (accelerated) => {
       const g = gate.current
       // Empty-draft accelerated Enter acts on the queue instead of the

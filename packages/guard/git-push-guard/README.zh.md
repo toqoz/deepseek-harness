@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-该包阻止智能体自行向远程仓库发布内容。当某个会话的守卫开启时，经 `bash`、`pwsh` 或 `terminal_send` 工具执行的 `git push` 会等待用户在 Web UI 中确认。问题中显示确切的命令：选择 **Allow** 执行这一条命令，选择 **Reject** 则阻止并返回模型可见的理由。新会话使用一个默认值，单个会话使用一个开关。提交不受守卫约束，该包也不会安装任何仓库钩子。
+该包阻止智能体自行向远程仓库发布内容。当某个会话的守卫开启时，经 `bash`、`pwsh` 或 `terminal_send` 工具执行的 `git push` 会等待用户在 Web UI 中确认。`guardedBranches` 与 `guardedBranchesPrefix` 把守卫收窄到指定分支：设置 `guardedBranches: ["main"]` 后，到达 `main` 的推送会询问，其他分支直接执行；两个列表都为空时则询问每一次推送。命令没有指明分支的推送（例如 `git push`，或 `--all` 之类）同样会询问，因为它可能在没有指名的情况下到达受守卫的分支。问题中显示确切的命令：选择 **Allow** 执行这一条命令，选择 **Reject** 则阻止并返回模型可见的理由。新会话使用一个默认值，单个会话使用一个开关。提交不受守卫约束，该包也不会安装任何仓库钩子。
 
 ## 目录
 
@@ -37,6 +37,8 @@ kind: "package-reference"
 |---|---|---|
 | `stateFile` | `$DSH_HOME/push-guard/state.json` | 持久化设置文件的绝对路径 |
 | `defaultEnabled` | `true` | 没有存储选择的会话启动时是否开启守卫 |
+| `guardedBranches` | `[]` | 推送到这些分支名时需要确认 |
+| `guardedBranchesPrefix` | `[]` | 推送到这些分支名前缀时需要确认（`release/` 覆盖 `release/2026-05`） |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-git-push-guard)记录了所有接受的值。
 
@@ -99,12 +101,14 @@ kind: "package-reference"
 ##### 会话策略段落
 
 ```markdown
-Git push guard is enabled in this session: git push commands do not run until the user answers the confirmation question the Harness shows right before the command runs. If the user rejects it, do not retry unless the user asks you to push. The user can turn the guard off for this session from the guard chip in the composer.
+Git push guard is enabled in this session: git push commands to `main`, `release/*`, and pushes that name no branch do not run until the user answers the confirmation question the Harness shows right before the command runs. If the user rejects it, do not retry unless the user asks you to push. The user can turn the guard off for this session from the guard chip in the composer.
 ```
+
+当两个分支列表都为空时，同一段落改为 `git push commands do not run`，不再列举分支。
 
 #### Token 影响
 
-目标会话守卫开启时每个请求一段固定文字；守卫关闭的会话不产生 token。
+目标会话守卫开启时每个请求一段固定文字；守卫关闭的会话不产生 token。`guardedBranches` 与 `guardedBranchesPrefix` 只在加载时改变该段落的分支列表，因此每次部署仍保持固定的前缀。
 
 #### KV Cache 影响
 

@@ -250,6 +250,7 @@ describe('loaded prompt recall', () => {
     shell.editor.setRootElement(root)
     onTestFinished(registerComposerKeymap(shell.editor, {
       arbitrate: () => 'pass', space: () => false, dismissPopup: () => {}, recallHistory: direction => shell.recallHistory(direction),
+      enterInsertsLineBreak: () => false,
       canSubmit: () => true, submit: () => {}, intakeFiles: () => {}, pasteText: () => {},
     }))
     window.getSelection()?.collapse(root.firstElementChild ?? root, 0)
@@ -290,6 +291,7 @@ describe('history arrow routing', () => {
     const arbitrate = vi.fn((): 'consumed' | 'pass' => 'pass')
     onTestFinished(registerComposerKeymap(editor, {
       arbitrate, space: () => false, dismissPopup: () => {}, recallHistory,
+      enterInsertsLineBreak: () => false,
       canSubmit: () => true, submit: () => {}, intakeFiles: () => {}, pasteText: () => {},
     }))
     editor.update(() => {
@@ -392,6 +394,7 @@ describe('history arrow routing', () => {
     const recallHistory = vi.fn(() => true)
     onTestFinished(registerComposerKeymap(editor, {
       arbitrate: () => 'pass', space: () => false, dismissPopup: () => {}, recallHistory,
+      enterInsertsLineBreak: () => false,
       canSubmit: () => true, submit: () => {}, intakeFiles: () => {}, pasteText: () => {},
     }))
     editor.update(() => { $getRoot().append($createParagraphNode()) }, { discrete: true })

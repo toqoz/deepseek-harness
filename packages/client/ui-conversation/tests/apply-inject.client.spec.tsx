@@ -612,6 +612,7 @@ describe('Conversation inject API', () => {
     const off = registerComposerKeymap(editor, {
       arbitrate: () => 'pass', space: () => false, dismissPopup: () => {}, recallHistory: () => false,
       canSubmit: () => true, submit: () => {}, pasteText: (text) => { composer.keyboard!.paste(text) },
+      enterInsertsLineBreak: () => false,
       intakeFiles: (files, directories) => { expect(composer.addFiles?.(files, directories)).toBeNull() },
     })
     onTestFinished(off)

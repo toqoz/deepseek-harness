@@ -151,25 +151,31 @@ function executableName(word: string): string {
  * @param posix - whether the shell accepts POSIX short-option clusters.
  * @returns the nested command string, or undefined for a plain script run.
  */
-function shellPayloadIn(words: readonly string[], flags: readonly string[], posix: boolean): string | undefined {
+function shellPayloadWordsIn(words: readonly string[], flags: readonly string[], posix: boolean): readonly string[] | undefined {
   for (let index = 1; index < words.length; index += 1) {
     const word = words[index] as string
     const lower = word.toLowerCase()
     if (flags.includes(lower) || (posix && SHELL_COMMAND_CLUSTER.test(lower))) {
-      return words.slice(index + 1).join(' ')
+      return words.slice(index + 1)
     }
     if (!lower.startsWith('-') && !lower.startsWith('/')) return undefined
   }
   return undefined
 }
 
+/** One recognized push invocation: the subcommand and the words after it. */
+interface PushInvocation {
+  readonly subcommand: string
+  readonly args: readonly string[]
+}
+
 /**
- * Return the push-creating Git subcommand one command segment runs.
- * @param segment - one shell command segment.
- * @returns the matched subcommand, or undefined.
+ * Return the push-creating Git invocation one word list runs.
+ * @param start - the segment's words.
+ * @returns the invocation, or undefined.
  */
-function pushSubcommandIn(segment: string): string | undefined {
-  let current = words(segment)
+function pushInvocationOfWords(start: readonly string[]): PushInvocation | undefined {
+  let current = start
   while (current.length > 0) {
     while (current.length > 0 && ASSIGNMENT.test(current[0] as string)) current = current.slice(1)
     if (current.length === 0) break
@@ -186,21 +192,24 @@ function pushSubcommandIn(segment: string): string | undefined {
         index += GIT_VALUE_OPTIONS.has(word) ? 2 : 1
       }
       const subcommand = current[index]
-      if (subcommand !== undefined && PUSH_SUBCOMMANDS.has(subcommand)) return subcommand
+      if (subcommand !== undefined && PUSH_SUBCOMMANDS.has(subcommand)) {
+        return { subcommand, args: current.slice(index + 1) }
+      }
       break
     }
     const flags = SHELL_FLAGS.get(head)
     if (flags !== undefined) {
-      const nested = shellPayloadIn(current, flags, POSIX_SHELLS.has(head))
+      const nested = shellPayloadWordsIn(current, flags, POSIX_SHELLS.has(head))
       if (nested !== undefined) {
-        const subcommand = pushSubcommandOf(nested)
-        if (subcommand !== undefined) return subcommand
+        // The payload arrived as one quoted word, so split it again as a command.
+        const invocation = pushInvocationOfWords(words(nested.join(' ')))
+        if (invocation !== undefined) return invocation
       }
       break
     }
     if (head === 'eval') {
-      const nested = pushSubcommandOf(current.slice(1).join(' '))
-      if (nested !== undefined) return nested
+      const invocation = pushInvocationOfWords(words(current.slice(1).join(' ')))
+      if (invocation !== undefined) return invocation
       break
     }
     if (WRAPPERS.has(head)) {
@@ -217,14 +226,95 @@ function pushSubcommandIn(segment: string): string | undefined {
 }
 
 /**
+ * Return the push-creating Git invocation one command segment runs.
+ * @param segment - one shell command segment.
+ * @returns the invocation, or undefined.
+ */
+function pushInvocationIn(segment: string): PushInvocation | undefined {
+  return pushInvocationOfWords(words(segment))
+}
+
+/**
  * Return the push-creating Git subcommand a shell command runs, if any.
  * @param command - one shell command string.
  * @returns the matched subcommand, or undefined.
  */
 export function pushSubcommandOf(command: string): string | undefined {
+  return pushTargetOf(command) === undefined ? undefined : 'push'
+}
+
+/** Push flags that consume the following word as their value. */
+const PUSH_VALUE_FLAGS = new Set(['--repo', '--receive-pack', '--exec', '-o', '--push-option'])
+
+/** Push flags that publish every branch, so no single destination names the risk. */
+const PUSH_ALL_FLAGS = new Set(['--all', '--branches', '--mirror', '--tags'])
+
+/** The destination branches and coverage of one push invocation. */
+export interface PushTarget {
+  /** Remote branch names the command creates, updates, or deletes; empty when it names none. */
+  readonly branches: readonly string[]
+  /** Whether the push publishes every branch (`--all`, `--branches`, `--mirror`, `--tags`). */
+  readonly all: boolean
+  /** Whether the command names no destination, leaving the pushed branch to the working copy. */
+  readonly implicit: boolean
+}
+
+/**
+ * Read the destination branch name one refspec names.
+ * @param refspec - one push refspec or branch argument.
+ * @returns the remote branch's short name, or undefined when it names no branch.
+ */
+function destinationOf(refspec: string): string | undefined {
+  const text = refspec.startsWith('+') ? refspec.slice(1) : refspec
+  const colon = text.indexOf(':')
+  // `<src>:<dst>` names the destination; an empty destination deletes the source.
+  const name = colon === -1 ? text : text.slice(colon + 1) === '' ? text.slice(0, colon) : text.slice(colon + 1)
+  const short = name.startsWith('refs/heads/') ? name.slice('refs/heads/'.length) : name
+  if (short === '' || short === 'HEAD' || short.startsWith('refs/')) return undefined
+  return short
+}
+
+/**
+ * Return the destination branches one push invocation publishes.
+ * @param args - the words after the `push` subcommand.
+ * @returns the target, with `implicit` marking a push that names no destination.
+ */
+function targetOf(args: readonly string[]): PushTarget {
+  const refspecs: string[] = []
+  let all = false
+  let index = 0
+  // The first bare word is the remote; every later bare word is a refspec.
+  while (index < args.length && args[index]?.startsWith('-') === true) {
+    const flag = args[index] as string
+    if (PUSH_ALL_FLAGS.has(flag)) all = true
+    index += PUSH_VALUE_FLAGS.has(flag) ? 2 : 1
+  }
+  index += 1
+  for (; index < args.length; index += 1) {
+    const word = args[index] as string
+    if (word.startsWith('-')) {
+      if (PUSH_ALL_FLAGS.has(word)) all = true
+      if (PUSH_VALUE_FLAGS.has(word)) index += 1
+      continue
+    }
+    refspecs.push(word)
+  }
+  const branches = refspecs.flatMap((refspec) => {
+    const branch = destinationOf(refspec)
+    return branch === undefined ? [] : [branch]
+  })
+  return { branches, all, implicit: !all && branches.length === 0 }
+}
+
+/**
+ * Return the destination branches a shell command pushes to, if it pushes.
+ * @param command - one shell command string.
+ * @returns the push target, or undefined when the command pushes nothing.
+ */
+export function pushTargetOf(command: string): PushTarget | undefined {
   for (const segment of segments(command)) {
-    const subcommand = pushSubcommandIn(segment)
-    if (subcommand !== undefined) return subcommand
+    const invocation = pushInvocationIn(segment)
+    if (invocation !== undefined) return targetOf(invocation.args)
   }
   return undefined
 }

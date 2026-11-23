@@ -7,6 +7,9 @@
  * defaults (Shift+Enter's line break, ordinary spaces, text paste the bar
  * routes itself).
  *
+ * Enter submits, except on a touch device without Shift+Enter, where it types
+ * a line break and the Send button owns submission.
+ *
  * IME guard: a composition-closing Enter/Space must not submit or adjudicate.
  * KeyboardEvent.isComposing covers most engines; Safari delivers the closing
  * keydown AFTER compositionend, so a root-element composition watch holds the
@@ -40,6 +43,12 @@ export interface ComposerKeymapHandlers {
   recallHistory(direction: 'older' | 'newer'): boolean
   /** Whether Enter may submit right now (locked/busy states refuse). */
   canSubmit(): boolean
+  /**
+   * Whether plain Enter types a line break instead of submitting.
+   * Touch keyboards have no Shift+Enter, so a device that cannot produce the
+   * modified gesture keeps Enter for editing and submits through the button.
+   */
+  enterInsertsLineBreak(): boolean
   /** Plain Enter submits; exactly Ctrl+Enter or Cmd+Enter selects accelerated delivery. */
   submit(accelerated: boolean): void
   /**
@@ -333,6 +342,9 @@ export function registerComposerKeymap(editor: LexicalEditor, handlers: Composer
         event?.preventDefault()
         return true
       }
+      // A touch keyboard's Enter is its only line-break key; submitting from
+      // this gesture would leave no way to write a second line.
+      if (handlers.enterInsertsLineBreak()) return false
       event?.preventDefault()
       if (event?.repeat === true) return true // held-down Enter must not machine-gun sends
       if (!handlers.canSubmit()) return true
